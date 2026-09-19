@@ -145,9 +145,11 @@ func (h *Handler) saveFile(dir, name string, header *multipart.FileHeader) (stri
 		return "", fmt.Errorf("upload: close %s: %w", target, err)
 	}
 	if h.FileMode != 0 {
-		// OpenFile applies umask, chmod does not.
+		// OpenFile applies umask, chmod does not. On FAT USB sticks chmod
+		// commonly fails, so warn rather than reject the upload.
 		if err := os.Chmod(target, h.FileMode); err != nil {
-			return target, nil
+			h.log().Warn("could not set uploaded file mode",
+				"file", target, "mode", h.FileMode, "error", err)
 		}
 	}
 	return target, nil

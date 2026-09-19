@@ -303,3 +303,215 @@ func TestPublishedFiles(t *testing.T) {
 		t.Errorf("missing dir = %v, %v", missing, err)
 	}
 }
+
+func TestUploadHeadRequest(t *testing.T) {
+	h := New(t.TempDir())
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodHead, "/", nil))
+	if rec.Code != http.StatusOK {
+		t.Errorf("HEAD status = %d", rec.Code)
+	}
+}
+
+func TestUploadMethodNotAllowed(t *testing.T) {
+	h := New(t.TempDir())
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodDelete, "/", nil))
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Errorf("status = %d, want 405", rec.Code)
+	}
+}
+
+func TestUploadPostWithoutFileField(t *testing.T) {
+	h := New(t.TempDir())
+	body, contentType := multipartBody(t, nil, map[string]string{"other": "value"})
+	req := httptest.NewRequest(http.MethodPost, "/", body)
+	req.Header.Set("Content-Type", contentType)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "File received!") {
+		t.Errorf("expected success page: %s", rec.Body.String())
+	}
+}
+
+func TestUploadBlockedAlongsideValidFile(t *testing.T) {
+	dir := t.TempDir()
+	h := New(dir)
+	rec := postFiles(t, h, map[string]string{"index.html": "evil", "good.txt": "fine"}, nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d", rec.Code)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "index.html")); err == nil {
+		t.Error("index.html should be blocked")
+	}
+	if _, err := os.Stat(filepath.Join(dir, "good.txt")); err != nil {
+		t.Errorf("good.txt should be saved: %v", err)
+	}
+}
+
+func TestUploadEmptyFilenameIsSkipped(t *testing.T) {
+	h := New(t.TempDir())
+	body, contentType := multipartBody(t, nil, nil)
+	// Create a part with an empty filename.
+	writer := multipart.NewWriter(body)
+	part, err := writer.CreateFormFile("upfile", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	part.Write([]byte("data"))
+	writer.Close()
+	req := httptest.NewRequest(http.MethodPost, "/", body)
+	req.Header.Set("Content-Type", contentType)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Errorf("status = %d", rec.Code)
+	}
+}
+
+func TestUploadWriteError(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root bypasses permissions")
+	}
+	dir := t.TempDir()
+	h := New(dir)
+	// Make the upload directory read only so file creation fails.
+	if err := os.Chmod(dir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chmod(dir, 0o700)
+	rec := postFiles(t, h, map[string]string{"x.txt": "data"}, nil)
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("status = %d, want 500", rec.Code)
+	}
+}
+
+func TestUploadMessageShown(t *testing.T) {
+	h := New(t.TempDir())
+	h.Message = "Drop your files here"
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+	if !strings.Contains(rec.Body.String(), "Drop your files here") {
+		t.Errorf("message missing: %s", rec.Body.String())
+	}
+}
+
+func TestUploadMessageEscaped(t *testing.T) {
+	h := New(t.TempDir())
+	h.Message = `<script>alert(1)</script>`
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+	if strings.Contains(rec.Body.String(), "<script>alert(1)</script>") {
+		t.Errorf("message not escaped: %s", rec.Body.String())
+	}
+}
+
+func TestUploadLoggerFallback(t *testing.T) {
+	h := New(t.TempDir())
+	if h.log() == nil {
+		t.Error("log() should never return nil")
+	}
+}
+
+func TestUploadDefaultFileMode(t *testing.T) {
+	dir := t.TempDir()
+	h := New(dir)
+	h.FileMode = 0 // exercise the default branch
+	postFiles(t, h, map[string]string{"f.txt": "x"}, nil)
+	if _, err := os.Stat(filepath.Join(dir, "f.txt")); err != nil {
+		t.Errorf("file missing: %v", err)
+	}
+}
+
+func TestUserDirsPasswordFilePersistence(t *testing.T) {
+	dir := t.TempDir()
+	passFile := filepath.Join(t.TempDir(), "nested", "passwd.json")
+	h := New(dir)
+	h.UserDirs = true
+	h.PasswordFile = passFile
+
+	postFiles(t, h, map[string]string{"a.txt": "1"}, map[string]string{"subdir": "bob", "secret": "pw"})
+	if _, err := os.Stat(passFile); err != nil {
+		t.Fatalf("password file not written: %v", err)
+	}
+	// A second handler reading the same file accepts the same password.
+	h2 := New(t.TempDir())
+	h2.UserDirs = true
+	h2.PasswordFile = passFile
+	rec := postFiles(t, h2, map[string]string{"b.txt": "2"}, map[string]string{"subdir": "bob", "secret": "pw"})
+	if rec.Code != http.StatusOK {
+		t.Errorf("stored password rejected: %d", rec.Code)
+	}
+}
+
+func TestUserDirsCorruptPasswordFile(t *testing.T) {
+	dir := t.TempDir()
+	passFile := filepath.Join(t.TempDir(), "passwd.json")
+	if err := os.WriteFile(passFile, []byte("not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	h := New(dir)
+	h.UserDirs = true
+	h.PasswordFile = passFile
+	// Corrupt file means no stored passwords; the directory is created anew.
+	rec := postFiles(t, h, map[string]string{"a.txt": "1"}, map[string]string{"subdir": "carol", "secret": "pw"})
+	if rec.Code != http.StatusOK {
+		t.Errorf("status = %d", rec.Code)
+	}
+}
+
+func TestUserDirsAnonymousWithoutSubdir(t *testing.T) {
+	dir := t.TempDir()
+	h := New(dir)
+	h.UserDirs = true
+	h.PasswordFile = filepath.Join(t.TempDir(), "passwd.json")
+	rec := postFiles(t, h, map[string]string{"anon.txt": "x"}, map[string]string{"subdir": "anonymous", "secret": "ignored"})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d", rec.Code)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "anonymous", "anon.txt")); err != nil {
+		t.Errorf("anonymous file missing: %v", err)
+	}
+}
+
+func TestSafeDirName(t *testing.T) {
+	cases := map[string]string{
+		"alice":      "alice",
+		"alice bob":  "alice bob",
+		"a-b_c(d)%":  "a-b_c(d)%",
+		"bad/name":   "badname",
+		"bad..name":  "badname",
+		"  spaces  ": "spaces",
+		"":           "",
+		"///":        "",
+		// Uppercase is stripped; the caller lowercases first, like droopy.
+		"ALICE": "",
+	}
+	for in, want := range cases {
+		got, _ := safeDirName(in)
+		if got != want {
+			t.Errorf("safeDirName(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestUniquePathWithExtensionlessName(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "README"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got := UniquePath(dir, "README")
+	if filepath.Base(got) != "README-1" {
+		t.Errorf("UniquePath = %q", got)
+	}
+}
+
+func TestPublishedFilesMissingDirectory(t *testing.T) {
+	names, err := PublishedFiles(filepath.Join(t.TempDir(), "missing"))
+	if err != nil || len(names) != 0 {
+		t.Errorf("PublishedFiles = %v, %v", names, err)
+	}
+}

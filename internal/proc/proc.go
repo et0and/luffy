@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -196,12 +195,4 @@ func (f *Fake) Has(fragments ...string) bool {
 		}
 	}
 	return false
-}
-
-// SortedNames returns recorded command names sorted alphabetically. Useful
-// for diagnostics.
-func (f *Fake) SortedNames() []string {
-	names := f.Names()
-	sort.Strings(names)
-	return names
 }

@@ -451,3 +451,272 @@ func TestConcurrentPosting(t *testing.T) {
 		t.Errorf("reply count after concurrency = %q", parts)
 	}
 }
+
+func TestStringUnescapeAllEscapes(t *testing.T) {
+	cases := map[string]string{
+		`\n`:         "\n",
+		`\r`:         "\r",
+		`\t`:         "\t",
+		`\\`:         `\`,
+		`\'`:         "'",
+		`\"`:         `"`,
+		`\x41`:       "A",
+		`\u4e2d`:     "中",
+		`\U0001F600`: "😀",
+		`\q`:         `\q`,
+		`\x`:         `\x`,
+		`\xZZ`:       `\xZZ`,
+		`\u12`:       `\u12`,
+		`\uZZZZ`:     `\uZZZZ`,
+		`trailing\`:  `trailing\`,
+	}
+	for in, want := range cases {
+		if got := StringUnescape(in); got != want {
+			t.Errorf("StringUnescape(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestStringEscapeControlCharacters(t *testing.T) {
+	if got := StringEscape("\x00\x1f\x7f"); got != `\x00\x1f\x7f` {
+		t.Errorf("control chars = %q", got)
+	}
+	if got := StringEscape("plain"); got != "plain" {
+		t.Errorf("plain = %q", got)
+	}
+}
+
+func TestProcessAuthorAndSubjectHelpers(t *testing.T) {
+	if got := ProcessAuthor("a\tb", 20); got != "a b" {
+		t.Errorf("tab not replaced: %q", got)
+	}
+	if got := ProcessAuthor(strings.Repeat("x", 30), 20); len(got) != 20 {
+		t.Errorf("author length = %d", len(got))
+	}
+	if got := ProcessSubject(nil, 100); got != "No Subject" {
+		t.Errorf("nil subject = %q", got)
+	}
+	subject := strings.Repeat("y", 150)
+	if got := ProcessSubject(&subject, 100); len(got) != 100 {
+		t.Errorf("subject length = %d", len(got))
+	}
+}
+
+func TestRenderStandaloneError(t *testing.T) {
+	store, _ := fixedStore(t)
+	page := store.RenderStandaloneError("boom")
+	if !strings.Contains(page, "boom") || !strings.Contains(page, "PirateBox Board") {
+		t.Errorf("standalone error page = %s", page)
+	}
+}
+
+func TestRenderRedirect(t *testing.T) {
+	store, _ := fixedStore(t)
+	page := store.RenderRedirect("abc", 20)
+	if !strings.Contains(page, "/board/?thread=abc&offset=20") {
+		t.Errorf("redirect = %s", page)
+	}
+	page = store.RenderRedirect("abc", 0)
+	if strings.Contains(page, "offset") {
+		t.Errorf("offset should be omitted at zero: %s", page)
+	}
+}
+
+func TestRenderErrorPageFallback(t *testing.T) {
+	store, _ := fixedStore(t)
+	// A page without the header marker still gets the error prepended.
+	page := store.RenderErrorPage("err", nil, 0, 0)
+	if !strings.Contains(page, "err") {
+		t.Errorf("error page = %s", page)
+	}
+}
+
+func TestHandlerReplyWithoutThread(t *testing.T) {
+	store, _ := fixedStore(t)
+	handler := NewHandler(store)
+	form := url.Values{"author": {"x"}, "body": {"y"}}
+	req := httptest.NewRequest(http.MethodPost, "/board/?new=reply", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "Invalid Thread") {
+		t.Errorf("reply without thread = %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestHandlerUnknownAction(t *testing.T) {
+	store, _ := fixedStore(t)
+	handler := NewHandler(store)
+	form := url.Values{"author": {"x"}, "body": {"y"}}
+	req := httptest.NewRequest(http.MethodPost, "/board/?new=bogus", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "Invalid Thread") {
+		t.Errorf("unknown action = %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestHandlerGetOnPostAction(t *testing.T) {
+	store, _ := fixedStore(t)
+	handler := NewHandler(store)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/board/?new=thread", nil))
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Errorf("GET on post action = %d, want 405", rec.Code)
+	}
+}
+
+func TestHandlerBadForm(t *testing.T) {
+	store, _ := fixedStore(t)
+	handler := NewHandler(store)
+	req := httptest.NewRequest(http.MethodPost, "/board/?new=thread", strings.NewReader("%zz"))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("bad form = %d, want 400", rec.Code)
+	}
+}
+
+func TestHandlerReplyMissingBody(t *testing.T) {
+	store, _ := fixedStore(t)
+	hash, _ := store.NewThread("a", "s", "b")
+	handler := NewHandler(store)
+	form := url.Values{"author": {"x"}}
+	req := httptest.NewRequest(http.MethodPost, "/board/?new=reply&thread="+hash, strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if !strings.Contains(rec.Body.String(), "No body text") {
+		t.Errorf("missing body reply = %s", rec.Body.String())
+	}
+}
+
+func TestHandlerDefaultAuthor(t *testing.T) {
+	store, dir := fixedStore(t)
+	handler := NewHandler(store)
+	form := url.Values{"subject": {"s"}, "body": {"b"}}
+	req := httptest.NewRequest(http.MethodPost, "/board/?new=thread", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("status = %d", rec.Code)
+	}
+	data, _ := os.ReadFile(filepath.Join(dir, "index.txt"))
+	if !strings.Contains(string(data), "Anonymous Coward") {
+		t.Errorf("default author missing: %s", data)
+	}
+}
+
+func TestStoreThreadMissingFile(t *testing.T) {
+	store, dir := fixedStore(t)
+	// A valid hash naming a missing file must be reported as invalid.
+	if err := os.WriteFile(filepath.Join(dir, "index.txt"), []byte(""), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Thread("deadbeef", 0); err != ErrInvalidThread {
+		t.Errorf("missing thread err = %v", err)
+	}
+}
+
+func TestStoreNewCreatesDataDirectory(t *testing.T) {
+	dir := t.TempDir()
+	cfg := Defaults(filepath.Join(dir, "nested", "forumspace"))
+	store := New(cfg)
+	if _, err := store.NewThread("a", "s", "b"); err != nil {
+		t.Fatalf("new thread: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "nested", "forumspace", "index.txt")); err != nil {
+		t.Errorf("index not created: %v", err)
+	}
+}
+
+func TestStoreReplyToCorruptIndexLine(t *testing.T) {
+	store, dir := fixedStore(t)
+	hash, _ := store.NewThread("a", "s", "b")
+	// A short line in the index is skipped rather than crashing.
+	index, _ := os.ReadFile(filepath.Join(dir, "index.txt"))
+	if err := os.WriteFile(filepath.Join(dir, "index.txt"), append(index, []byte("\nshort\tline")...), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Reply(hash, "x", "y"); err != nil {
+		t.Errorf("reply with corrupt index line: %v", err)
+	}
+}
+
+func TestRenderIndexWithOffsetPaging(t *testing.T) {
+	store, _ := fixedStore(t)
+	cfg := store.Config()
+	cfg.IndexPageSize = 2
+	store = New(cfg)
+	for i := 0; i < 5; i++ {
+		if _, err := store.NewThread("a", "subject", "body"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	summaries, total, _ := store.ListThreads(2)
+	page := store.RenderIndex(summaries, total, 2)
+	if !strings.Contains(page, "offset=0") || !strings.Contains(page, "offset=4") {
+		t.Errorf("paging links wrong: %s", page)
+	}
+}
+
+func TestConcurrentNewThreads(t *testing.T) {
+	store, dir := fixedStore(t)
+	done := make(chan error, 5)
+	for i := 0; i < 5; i++ {
+		go func() {
+			_, err := store.NewThread("a", "s", "b")
+			done <- err
+		}()
+	}
+	for i := 0; i < 5; i++ {
+		if err := <-done; err != nil {
+			t.Fatalf("concurrent new thread: %v", err)
+		}
+	}
+	data, _ := os.ReadFile(filepath.Join(dir, "index.txt"))
+	if lines := strings.Count(string(data), "\n") + 1; lines != 5 {
+		t.Errorf("index lines = %d, want 5:\n%s", lines, data)
+	}
+}
+
+func TestThreadOffsetOutOfRangeDoesNotPanic(t *testing.T) {
+	store, _ := fixedStore(t)
+	hash, _ := store.NewThread("a", "s", "one")
+	// Offsets past the end of the thread must render an empty page, like
+	// Python's list slicing, rather than panicking.
+	for _, offset := range []int{1, 2, 100, 1 << 20} {
+		thread, err := store.Thread(hash, offset)
+		if err != nil {
+			t.Fatalf("offset %d: %v", offset, err)
+		}
+		if len(thread.Posts) != 0 {
+			t.Errorf("offset %d returned %d posts", offset, len(thread.Posts))
+		}
+	}
+}
+
+func TestThreadWithNoPostsAtOffsetOne(t *testing.T) {
+	store, dir := fixedStore(t)
+	hash := "abcdef0123456789abcdef0123456789"
+	if err := os.WriteFile(filepath.Join(dir, hash), []byte(hash+"\tsubject\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Thread(hash, 1); err != nil {
+		t.Fatalf("empty thread with offset 1: %v", err)
+	}
+}
+
+func TestHandlerExtremeOffset(t *testing.T) {
+	store, _ := fixedStore(t)
+	hash, _ := store.NewThread("a", "s", "body")
+	handler := NewHandler(store)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/board/?thread="+hash+"&offset=99999", nil))
+	if rec.Code != http.StatusOK {
+		t.Errorf("status = %d, want 200", rec.Code)
+	}
+}

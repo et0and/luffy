@@ -8,10 +8,11 @@ package diskusage
 import (
 	"fmt"
 	"os"
-	"path/filepath"
 	"sync"
 	"syscall"
 	"time"
+
+	"luffy/internal/atomicfile"
 )
 
 // DefaultDelay matches the original `delay = 60*5`.
@@ -135,26 +136,7 @@ func (g *Generator) Write() error {
 }
 
 func (g *Generator) writeLocked() error {
-	if err := os.MkdirAll(filepath.Dir(g.Path), 0o755); err != nil {
-		return fmt.Errorf("diskusage: create dir: %w", err)
-	}
-	tmp, err := os.CreateTemp(filepath.Dir(g.Path), ".luffy-du-*")
-	if err != nil {
-		return fmt.Errorf("diskusage: temp file: %w", err)
-	}
-	tmpName := tmp.Name()
-	defer os.Remove(tmpName)
-	if _, err := tmp.WriteString(Page(g.Line())); err != nil {
-		tmp.Close()
-		return fmt.Errorf("diskusage: write: %w", err)
-	}
-	if err := tmp.Close(); err != nil {
-		return fmt.Errorf("diskusage: close: %w", err)
-	}
-	if err := os.Rename(tmpName, g.Path); err != nil {
-		return fmt.Errorf("diskusage: rename: %w", err)
-	}
-	return nil
+	return atomicfile.WriteString(g.Path, Page(g.Line()))
 }
 
 func (g *Generator) delay() time.Duration {

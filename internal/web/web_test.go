@@ -398,3 +398,256 @@ func TestListenAndServeShutdown(t *testing.T) {
 		t.Fatal("server did not stop")
 	}
 }
+
+func TestDiskUsageReadFallbackWhenFileMissing(t *testing.T) {
+	srv, cfg, _ := testServer(t)
+	// Remove the generated file after priming so the read path falls back.
+	if err := srv.opts.DiskUsage.Write(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(cfg.GenDiskFile); err != nil {
+		t.Fatal(err)
+	}
+	// Make the generator unable to write by pointing it at an invalid path.
+	srv.opts.DiskUsage.Path = filepath.Join(cfg.GenDiskFile, "not-a-dir", "out.html")
+	rec := do(t, srv, http.MethodGet, "/diskusage.html", nil, nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "progress") {
+		t.Errorf("fallback body = %s", rec.Body.String())
+	}
+}
+
+func TestDiskUsageWriteMethodNotAllowed(t *testing.T) {
+	srv, _, _ := testServer(t)
+	rec := do(t, srv, http.MethodGet, "/cgi-bin/diskwrite.py", nil, nil)
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Errorf("status = %d, want 405", rec.Code)
+	}
+}
+
+func TestShoutboxWriteMethodNotAllowed(t *testing.T) {
+	srv, _, _ := testServer(t)
+	rec := do(t, srv, http.MethodGet, "/cgi-bin/psowrte.py", nil, nil)
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Errorf("status = %d, want 405", rec.Code)
+	}
+}
+
+func TestShoutboxReadError(t *testing.T) {
+	srv, cfg, _ := testServer(t)
+	// A directory where the chat file belongs makes Read fail.
+	if err := os.MkdirAll(cfg.ChatFile, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	rec := do(t, srv, http.MethodGet, "/chat_content.html", nil, nil)
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("status = %d, want 500", rec.Code)
+	}
+}
+
+func TestShoutboxDefaultsForMissingFields(t *testing.T) {
+	srv, cfg, _ := testServer(t)
+	rec := do(t, srv, http.MethodPost, "/cgi-bin/psowrte.py", nil, url.Values{})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d", rec.Code)
+	}
+	data, _ := os.ReadFile(cfg.ChatFile)
+	if !strings.Contains(string(data), "&nbsp;") {
+		t.Errorf("defaults not applied: %s", data)
+	}
+	if !strings.Contains(string(data), "class='def'") {
+		t.Errorf("default color not applied: %s", data)
+	}
+}
+
+func TestShoutboxWriteError(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root bypasses permissions")
+	}
+	srv, cfg, _ := testServer(t)
+	// A directory where the chat file belongs makes the write fail.
+	if err := os.MkdirAll(cfg.ChatFile, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	rec := do(t, srv, http.MethodPost, "/cgi-bin/psowrte.py", nil, url.Values{"data": {"x"}})
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("status = %d, want 500", rec.Code)
+	}
+}
+
+func TestShoutboxGlobalChatDoesNotStoreLocally(t *testing.T) {
+	srv, cfg, _ := testServer(t)
+	cfg.GlobalChat = true
+	cfg.GlobalDest = []string{"255.255.255.255"}
+	fake := &captureSender{}
+	srv.opts.Broadcaster = &shoutbox.Broadcaster{Destinations: cfg.GlobalDest, Sender: fake}
+	rec := do(t, srv, http.MethodPost, "/cgi-bin/psowrte.py", nil, url.Values{"data": {"x"}})
+	if rec.Code != http.StatusOK {
+		t.Errorf("status = %d", rec.Code)
+	}
+	if len(fake.messages) != 1 {
+		t.Errorf("broadcasts = %d, want 1", len(fake.messages))
+	}
+	if _, err := os.Stat(cfg.ChatFile); err == nil {
+		t.Error("global chat mode should not write locally")
+	}
+}
+
+func TestNewInstallsDefaultBroadcaster(t *testing.T) {
+	srv := New(Options{})
+	if srv.opts.Broadcaster == nil {
+		t.Fatal("New should install a broadcaster")
+	}
+	if srv.opts.Broadcaster.Port != shoutbox.Port {
+		t.Errorf("broadcast port = %d", srv.opts.Broadcaster.Port)
+	}
+}
+
+func TestConfigJSONDefaultsModuleFiles(t *testing.T) {
+	srv, _, _ := testServer(t)
+	data, err := srv.ConfigJSON(ConfigModules{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "modules/chat.html") || !strings.Contains(string(data), "modules/upload.html") {
+		t.Errorf("default module files missing: %s", data)
+	}
+}
+
+func TestVersionFallsBackToBuildVersion(t *testing.T) {
+	srv, cfg, _ := testServer(t)
+	os.Remove(cfg.VersionFile)
+	if got := srv.version(); got != "test-version" {
+		t.Errorf("version = %q", got)
+	}
+	// An empty version file also falls back.
+	if err := os.WriteFile(cfg.VersionFile, []byte("\n\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := srv.version(); got != "test-version" {
+		t.Errorf("version with blank file = %q", got)
+	}
+}
+
+func TestListenAddrHelpers(t *testing.T) {
+	srv, cfg, _ := testServer(t)
+	cfg.HTTPPort = 8080
+	cfg.DroopyPort = "9090"
+	if got := srv.ListenAddr(); got != ":8080" {
+		t.Errorf("ListenAddr = %q", got)
+	}
+	if got := srv.UploadListenAddr(); got != ":9090" {
+		t.Errorf("UploadListenAddr = %q", got)
+	}
+	cfg.HTTPAddr = "127.0.0.1"
+	if got := srv.ListenAddr(); got != "127.0.0.1:8080" {
+		t.Errorf("ListenAddr with host = %q", got)
+	}
+}
+
+func TestListenAndServeUploadShutdown(t *testing.T) {
+	srv, _, _ := testServer(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- srv.ListenAndServeUpload(ctx, "127.0.0.1:0") }()
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Errorf("upload server error: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("upload server did not stop")
+	}
+}
+
+func TestBoardWithoutTrailingSlashRedirects(t *testing.T) {
+	srv, _, _ := testServer(t)
+	rec := do(t, srv, http.MethodGet, "/board", nil, nil)
+	if rec.Code != http.StatusMovedPermanently {
+		t.Errorf("status = %d, want 301", rec.Code)
+	}
+}
+
+func TestSharedWithoutTrailingSlashRedirects(t *testing.T) {
+	srv, _, _ := testServer(t)
+	rec := do(t, srv, http.MethodGet, "/Shared", nil, nil)
+	if rec.Code != http.StatusMovedPermanently {
+		t.Errorf("status = %d, want 301", rec.Code)
+	}
+}
+
+func TestUploadHandlerChmodParsing(t *testing.T) {
+	srv, cfg, _ := testServer(t)
+	cfg.DroopyChmod = "0640"
+	h := srv.uploadHandler()
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Errorf("status = %d", rec.Code)
+	}
+	// Invalid chmod values are ignored rather than fatal.
+	cfg.DroopyChmod = "not-octal"
+	if h := srv.uploadHandler(); h == nil {
+		t.Error("handler should still be built")
+	}
+}
+
+func TestUploadHandlerUserDirsFromConfig(t *testing.T) {
+	srv, cfg, _ := testServer(t)
+	cfg.DroopyUserDir = " -u True "
+	h := srv.uploadHandler()
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+	if !strings.Contains(rec.Body.String(), "advanced options") {
+		t.Errorf("user dir form missing: %s", rec.Body.String())
+	}
+}
+
+func TestServerDefaultsWithoutOptions(t *testing.T) {
+	// New must fill in every dependency so a bare call works.
+	srv := New(Options{Cfg: nil, Logger: nil})
+	if srv.opts.Cfg == nil || srv.opts.Logger == nil || srv.opts.Shoutbox == nil ||
+		srv.opts.Forum == nil || srv.opts.DiskUsage == nil || srv.opts.ContentFS == nil {
+		t.Errorf("New did not fill defaults: %+v", srv.opts)
+	}
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/content/", nil))
+	if rec.Code != http.StatusOK {
+		t.Errorf("default server status = %d", rec.Code)
+	}
+}
+
+func TestCaptivePortalCaseInsensitive(t *testing.T) {
+	srv, _, _ := testServer(t)
+	req := httptest.NewRequest(http.MethodGet, "/anything", nil)
+	req.Header.Set("User-Agent", "CAPTIVENETWORKSUPPORT/1.0")
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	if !strings.Contains(rec.Body.String(), "Success") {
+		t.Errorf("uppercase agent not detected: %s", rec.Body.String())
+	}
+}
+
+func TestConfigJSONDisabled(t *testing.T) {
+	srv, cfg, _ := testServer(t)
+	cfg.PbxJSONGeneration = false
+	rec := do(t, srv, http.MethodGet, "/piratebox_config.json", nil, nil)
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want 404 when generation is disabled", rec.Code)
+	}
+}
+
+func TestDiskUsageFallbackMatchesGeneratedFrame(t *testing.T) {
+	srv, cfg, _ := testServer(t)
+	srv.opts.DiskUsage.Path = filepath.Join(cfg.GenDiskFile, "impossible", "out.html")
+	rec := do(t, srv, http.MethodGet, "/diskusage.html", nil, nil)
+	body := rec.Body.String()
+	if !strings.Contains(body, "GENERATOR") || !strings.Contains(body, "aria-valuenow") {
+		t.Errorf("fallback should use the same frame as the generated page: %s", body)
+	}
+}

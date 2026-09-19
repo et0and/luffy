@@ -161,9 +161,6 @@ func HTMLEscape(text string) string {
 	return b.String()
 }
 
-// ClientTimestamp parses SHOUTBOX_CLIENT_TIMESTAMP style values.
-func ClientTimestamp(value string) bool { return value == "yes" }
-
 // ParseUnix converts a browser supplied Unix timestamp, falling back to now
 // for malformed values.
 func ParseUnix(raw string, now time.Time) time.Time {

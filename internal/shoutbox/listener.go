@@ -42,9 +42,16 @@ func (l *Listener) ListenAndServe(ctx context.Context) error {
 func (l *Listener) Serve(ctx context.Context, conn net.PacketConn) error {
 	defer conn.Close()
 
+	// The watcher closes the socket on cancellation and exits when Serve
+	// returns for any other reason, so no goroutine outlives the listener.
+	done := make(chan struct{})
+	defer close(done)
 	go func() {
-		<-ctx.Done()
-		conn.Close()
+		select {
+		case <-ctx.Done():
+			conn.Close()
+		case <-done:
+		}
 	}()
 
 	buf := make([]byte, 64*1024)
@@ -103,11 +110,4 @@ func (l *Listener) handle(raw string) {
 	if err := l.Handler(content); err != nil && l.Logger != nil {
 		l.Logger.Error("shoutbox handler failed", "error", err)
 	}
-}
-
-// LastSeen returns the most recently accepted packet, for diagnostics.
-func (l *Listener) LastSeen() string {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	return l.lastSeen
 }

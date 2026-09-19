@@ -142,20 +142,23 @@ func (p *Parser) parseReader(name string, r io.Reader, values Values, depth int,
 	return nil
 }
 
-// parseInclude recognises `. path` and `source path` lines.
+// parseInclude recognises `. path` and `source path` lines. A bare `.` or
+// `source` with no path is not an include; the caller warns and skips it.
 func parseInclude(line string) (string, bool) {
 	for _, prefix := range []string{".", "source"} {
-		if line == prefix {
-			return "", true
+		if !strings.HasPrefix(line, prefix) {
+			continue
 		}
-		if strings.HasPrefix(line, prefix) {
-			rest := line[len(prefix):]
-			if rest != "" && (rest[0] == ' ' || rest[0] == '\t') {
-				rest = strings.TrimSpace(rest)
-				rest = strings.Trim(rest, `"'`)
-				return rest, true
-			}
+		rest := line[len(prefix):]
+		if rest == "" || (rest[0] != ' ' && rest[0] != '\t') {
+			continue
 		}
+		rest = strings.TrimSpace(rest)
+		rest = strings.Trim(rest, `"'`)
+		if rest == "" {
+			continue
+		}
+		return rest, true
 	}
 	return "", false
 }
@@ -364,6 +367,81 @@ func expand(s string, values Values, p *Parser) string {
 		}
 		b.WriteString(values[s[i+1:j]])
 		i = j - 1
+	}
+	return b.String()
+}
+
+// resolveReferences expands $VAR references in every value, using only
+// names that are present in the map. It runs to a fixed point so a chain of
+// defaults resolves fully, and it leaves unknown names untouched so an
+// unset variable never silently erases part of a value.
+//
+// Values read from a configuration file are already expanded by the parser;
+// this pass exists for the built-in defaults, which are stored in the same
+// shell syntax (for example WWW_FOLDER="$PIRATEBOX_FOLDER/www").
+func resolveReferences(values Values) Values {
+	const maxPasses = 10 // far deeper than any real configuration
+	out := make(Values, len(values))
+	for k, v := range values {
+		out[k] = v
+	}
+	for pass := 0; pass < maxPasses; pass++ {
+		changed := false
+		for k, v := range out {
+			resolved := expandKnown(v, out)
+			if resolved != v {
+				out[k] = resolved
+				changed = true
+			}
+		}
+		if !changed {
+			break
+		}
+	}
+	return out
+}
+
+// expandKnown substitutes $VAR and ${VAR} only when the name is defined.
+func expandKnown(s string, values Values) string {
+	if !strings.ContainsRune(s, '$') {
+		return s
+	}
+	var b strings.Builder
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c != '$' {
+			b.WriteByte(c)
+			continue
+		}
+		if i+1 < len(s) && s[i+1] == '{' {
+			end := strings.IndexByte(s[i+2:], '}')
+			if end < 0 {
+				b.WriteByte(c)
+				continue
+			}
+			name := s[i+2 : i+2+end]
+			if replacement, ok := values[name]; ok {
+				b.WriteString(replacement)
+				i += 2 + end
+				continue
+			}
+			b.WriteByte(c)
+			continue
+		}
+		j := i + 1
+		for j < len(s) && isVarChar(s[j]) {
+			j++
+		}
+		if j == i+1 {
+			b.WriteByte(c)
+			continue
+		}
+		if replacement, ok := values[s[i+1:j]]; ok {
+			b.WriteString(replacement)
+			i = j - 1
+			continue
+		}
+		b.WriteByte(c)
 	}
 	return b.String()
 }

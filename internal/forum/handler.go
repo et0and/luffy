@@ -61,7 +61,9 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			h.renderError(w, r, status, ErrInvalidThread.Error())
 			return
 		}
-		writeHTML(w, http.StatusOK, h.Store.RenderThread(thread, offset))
+		// A failed post must be reported on the page it came from, matching
+		// forest.py which printed the error before the thread listing.
+		writeHTML(w, http.StatusOK, h.Store.RenderThreadWithError(thread, offset, postError))
 		return
 	}
 

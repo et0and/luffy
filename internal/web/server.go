@@ -5,6 +5,7 @@ package web
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
@@ -69,6 +70,13 @@ func New(opts Options) *Server {
 	}
 	if opts.DiskUsage == nil {
 		opts.DiskUsage = diskusage.New(opts.Cfg.UploadFolder, opts.Cfg.GenDiskFile)
+	}
+	if opts.Broadcaster == nil {
+		opts.Broadcaster = &shoutbox.Broadcaster{
+			Destinations: opts.Cfg.GlobalDest,
+			Port:         shoutbox.Port,
+			Logger:       opts.Logger,
+		}
 	}
 	if opts.ContentFS == nil {
 		opts.ContentFS = http.FS(assets.WWWContent())
@@ -160,8 +168,14 @@ func (s *Server) serve(ctx context.Context, addr string, handler http.Handler, n
 	if addr == "" {
 		addr = s.ListenAddr()
 	}
+	// Bind before starting the shutdown watcher. If the context is already
+	// cancelled when we get here, Serve on a bound listener still returns
+	// promptly, so there is no window where the watcher misses the signal.
+	listener, err := net.Listen("tcp", addr)
+	if err != nil {
+		return fmt.Errorf("web: listen %s: %w", addr, err)
+	}
 	server := &http.Server{
-		Addr:              addr,
 		Handler:           handler,
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       0,
@@ -177,8 +191,8 @@ func (s *Server) serve(ctx context.Context, addr string, handler http.Handler, n
 		case <-done:
 		}
 	}()
-	s.opts.Logger.Info("listening", "service", name, "addr", addr)
-	err := server.ListenAndServe()
+	s.opts.Logger.Info("listening", "service", name, "addr", listener.Addr().String())
+	err = server.Serve(listener)
 	close(done)
 	if errors.Is(err, http.ErrServerClosed) {
 		return nil

@@ -72,6 +72,26 @@ func (m *Manager) Start(ctx context.Context) error {
 	if err := m.emptyTmp(); err != nil {
 		m.Logger.Warn("could not empty tmp folder", "error", err)
 	}
+	// The original init script cleaned aborted uploads before starting
+	// droopy: zero byte files and leftover tmp* partials.
+	if m.Cfg.DroopyEnabled {
+		if deleted, err := DeleteEmptyFiles(m.Cfg.UploadFolder); err != nil {
+			m.Logger.Warn("could not delete empty uploads", "error", err)
+		} else if deleted > 0 {
+			m.Logger.Info("deleted empty uploads", "count", deleted)
+		}
+		if removed, err := RemovePartialUploads(m.Cfg.UploadFolder); err != nil {
+			m.Logger.Warn("could not remove partial uploads", "error", err)
+		} else if removed > 0 {
+			m.Logger.Info("removed partial uploads", "count", removed)
+		}
+	}
+	if m.Cfg.CustomDirlistCopy {
+		sourceDir := filepath.Join(m.Cfg.PirateboxFolder, "src")
+		if err := DistributeFiles(m.Cfg.UploadFolder, sourceDir, false); err != nil {
+			m.Logger.Warn("could not distribute directory listing files", "error", err)
+		}
+	}
 	if err := m.setupInterface(ctx); err != nil {
 		return err
 	}
@@ -483,14 +503,13 @@ func (m *Manager) Timesave() *timesave.Saver {
 	return timesave.New(m.Cfg.Timesave, m.Cfg.TimesaveFormat)
 }
 
-// Hooks returns a hook runner for the installation.
+// Hooks returns a hook runner for the installation. The timeout keeps a
+// stuck user hook from blocking start and stop forever.
 func (m *Manager) Hooks() *hooks.Runner {
-	return &hooks.Runner{
-		Dir:        filepath.Join(m.Cfg.PirateboxFolder, "bin", "hooks"),
-		ConfigPath: m.Cfg.Path,
-		Runner:     m.Runner,
-		Logger:     m.Logger,
-	}
+	runner := hooks.New(filepath.Join(m.Cfg.PirateboxFolder, "bin", "hooks"), m.Cfg.Path)
+	runner.Runner = m.Runner
+	runner.Logger = m.Logger
+	return runner
 }
 
 func (m *Manager) runHooks(ctx context.Context, stages []string) error {

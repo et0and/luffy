@@ -46,17 +46,6 @@ func writeFile(path string, data []byte, mode os.FileMode) error {
 	return os.WriteFile(path, data, mode)
 }
 
-// GeneratedPaths returns every file Generate writes.
-func (g *Generator) GeneratedPaths() []string {
-	return []string{
-		g.Cfg.HostsFile,
-		g.Cfg.DNSMasqConf,
-		g.Cfg.RadvdConf,
-		filepath.Join(g.Cfg.PirateboxFolder, "conf", "lighttpd", "env"),
-		g.Cfg.AvahiConf,
-	}
-}
-
 // Generate writes all derived files.
 func (g *Generator) Generate() error {
 	if err := g.GenerateHosts(); err != nil {

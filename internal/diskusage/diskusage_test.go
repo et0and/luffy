@@ -93,3 +93,67 @@ func TestWriteCreatesDirectories(t *testing.T) {
 		t.Fatalf("output missing: %v", err)
 	}
 }
+
+func TestSystemStatFSRealPath(t *testing.T) {
+	usage, err := SystemStatFS(t.TempDir())
+	if err != nil {
+		t.Fatalf("statfs: %v", err)
+	}
+	if usage.Total == 0 {
+		t.Error("total bytes should not be zero")
+	}
+	if usage.Used > usage.Total {
+		t.Errorf("used %d > total %d", usage.Used, usage.Total)
+	}
+	if usage.Free > usage.Total {
+		t.Errorf("free %d > total %d", usage.Free, usage.Total)
+	}
+}
+
+func TestSystemStatFSMissingPath(t *testing.T) {
+	if _, err := SystemStatFS(filepath.Join(t.TempDir(), "missing")); err == nil {
+		t.Error("expected error for missing path")
+	}
+}
+
+func TestNewUsesSystemStatFS(t *testing.T) {
+	g := New(t.TempDir(), filepath.Join(t.TempDir(), "out.html"))
+	if g.Stat == nil {
+		t.Fatal("New should default Stat to SystemStatFS")
+	}
+	if g.Delay != DefaultDelay {
+		t.Errorf("delay = %v, want %v", g.Delay, DefaultDelay)
+	}
+	if err := g.Write(); err != nil {
+		t.Fatalf("write with real statfs: %v", err)
+	}
+	if pct := g.Percent(); pct < 0 || pct > 100 {
+		t.Errorf("percent out of range: %d", pct)
+	}
+}
+
+func TestRefreshReportsWriteErrors(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root bypasses directory permissions")
+	}
+	dir := t.TempDir()
+	out := filepath.Join(dir, "sub", "diskusage.html")
+	g := New("/share", out)
+	g.Stat = func(string) (Usage, error) { return Usage{Total: 10, Used: 1}, nil }
+	// Create a file where the parent directory should go so MkdirAll fails.
+	if err := os.WriteFile(filepath.Join(dir, "sub"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := g.Refresh(true); err == nil {
+		t.Error("expected write error")
+	}
+	if _, err := g.Stale(); err == nil {
+		t.Error("expected stat error when the path is not a directory")
+	}
+	// A plain missing file is not an error: it just means "needs generating".
+	g2 := New("/share", filepath.Join(dir, "not-there.html"))
+	stale, err := g2.Stale()
+	if err != nil || !stale {
+		t.Errorf("Stale on missing file = %v, %v", stale, err)
+	}
+}

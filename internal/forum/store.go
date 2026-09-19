@@ -189,6 +189,11 @@ func (s *Store) Thread(hash string, offset int) (*Thread, error) {
 	if offset < 0 {
 		offset = 0
 	}
+	if offset > len(body) {
+		// An offset past the end is a valid empty page, like Python's
+		// posts[offset:offset+20] slicing. Never index out of range.
+		offset = len(body)
+	}
 	posts := make([]Post, 0, s.cfg.ThreadPageSize)
 	for _, line := range body[offset:] {
 		if len(posts) >= s.cfg.ThreadPageSize {

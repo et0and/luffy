@@ -153,9 +153,18 @@ func StringUnescape(s string) string {
 			b.WriteByte(c)
 		case 'u':
 			if i+5 < len(s) {
-				if v, ok := hexRune(s[i+2 : i+6]); ok {
+				if v, ok := hexRune(s[i+2:i+6], 4); ok {
 					b.WriteRune(rune(v))
 					i += 5
+					continue
+				}
+			}
+			b.WriteByte(c)
+		case 'U':
+			if i+9 < len(s) {
+				if v, ok := hexRune(s[i+2:i+10], 8); ok && v <= 0x10FFFF {
+					b.WriteRune(rune(v))
+					i += 9
 					continue
 				}
 			}
@@ -179,8 +188,8 @@ func hexByte(s string) (int, bool) {
 	return hi<<4 | lo, true
 }
 
-func hexRune(s string) (int, bool) {
-	if len(s) != 4 {
+func hexRune(s string, width int) (int, bool) {
+	if len(s) != width {
 		return 0, false
 	}
 	v := 0

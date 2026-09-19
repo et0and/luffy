@@ -3,8 +3,9 @@ package shoutbox
 import (
 	"fmt"
 	"os"
-	"path/filepath"
 	"sync"
+
+	"luffy/internal/atomicfile"
 )
 
 // Store persists shoutbox history. The format matches the original
@@ -74,35 +75,9 @@ func (s *Store) GeneratePage(htmlPath string) error {
 	if err != nil {
 		return err
 	}
-	return writeAtomic(htmlPath, []byte(GeneratePage(content)))
+	return atomicfile.WriteString(htmlPath, GeneratePage(content))
 }
 
 func (s *Store) writeLocked(content string) error {
-	if err := os.MkdirAll(filepath.Dir(s.path), 0o755); err != nil {
-		return fmt.Errorf("shoutbox: create dir: %w", err)
-	}
-	return writeAtomic(s.path, []byte(content))
-}
-
-// writeAtomic writes data through a temporary file in the same directory so
-// a crash cannot leave a half written chat history behind.
-func writeAtomic(path string, data []byte) error {
-	dir := filepath.Dir(path)
-	tmp, err := os.CreateTemp(dir, ".luffy-tmp-*")
-	if err != nil {
-		return fmt.Errorf("shoutbox: temp file: %w", err)
-	}
-	tmpName := tmp.Name()
-	defer os.Remove(tmpName)
-	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
-		return fmt.Errorf("shoutbox: write: %w", err)
-	}
-	if err := tmp.Close(); err != nil {
-		return fmt.Errorf("shoutbox: close: %w", err)
-	}
-	if err := os.Rename(tmpName, path); err != nil {
-		return fmt.Errorf("shoutbox: rename: %w", err)
-	}
-	return nil
+	return atomicfile.WriteString(s.path, content)
 }

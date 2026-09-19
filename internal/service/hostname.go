@@ -32,7 +32,9 @@ func SetHostname(cfg *config.Config, name string) error {
 	if name == "" {
 		return fmt.Errorf("service: hostname must not be empty")
 	}
-	if strings.ContainsAny(name, " \t\"'<>/\\") {
+	// Newlines are included because the value is written into both
+	// piratebox.conf and index.html.
+	if strings.ContainsAny(name, " \t\n\r\"'<>/\\") {
 		return fmt.Errorf("service: hostname %q contains invalid characters", name)
 	}
 	if err := os.MkdirAll(cfg.WwwFolder, 0o755); err != nil {
@@ -42,23 +44,23 @@ func SetHostname(cfg *config.Config, name string) error {
 	if err := os.WriteFile(filepath.Join(cfg.WwwFolder, "index.html"), []byte(page), 0o644); err != nil {
 		return fmt.Errorf("service: write index.html: %w", err)
 	}
-	if cfg.Path == "" {
-		return nil
-	}
-	updated, err := replaceHostLine(cfg.Path, name)
-	if err != nil {
+	// Keep the in-memory configuration in step even when there is no file to
+	// rewrite (for example when luffy is driven entirely from flags).
+	if _, err := replaceHostLine(cfg.Path, name); err != nil {
 		return err
 	}
-	if updated {
-		cfg.Values["HOST"] = name
-		cfg.Host = name
-	}
+	cfg.Values["HOST"] = name
+	cfg.Host = name
 	return nil
 }
 
 // replaceHostLine rewrites the first HOST= assignment in a configuration
-// file, keeping every other line untouched.
+// file, keeping every other line untouched. An empty path is a no-op so
+// callers can update only the in-memory configuration.
 func replaceHostLine(path, name string) (bool, error) {
+	if path == "" {
+		return false, nil
+	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return false, fmt.Errorf("service: read %s: %w", path, err)

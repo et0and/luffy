@@ -6,7 +6,6 @@ package dirlist
 import (
 	"fmt"
 	"html"
-	"log/slog"
 	"mime"
 	"net/http"
 	"net/url"
@@ -46,7 +45,6 @@ type Handler struct {
 	CSSPath    string
 	ShowHeader bool
 	ShowReadme bool
-	Logger     *slog.Logger
 }
 
 // New returns a handler rooted at root and mounted at prefix.

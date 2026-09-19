@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -321,5 +322,313 @@ func writeFile(t *testing.T, path, content string) {
 	t.Helper()
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestIPFallbackFromNetAndShort(t *testing.T) {
+	cfg := FromValues(Values{"NET": "10.0.0", "IP_SHORT": "5"})
+	delete(cfg.Values, "IP")
+	if got := cfg.IP(); got != "10.0.0.5" {
+		t.Errorf("IP = %q", got)
+	}
+	cfg = FromValues(Values{"IP": "1.2.3.4", "NET": "10.0.0", "IP_SHORT": "5"})
+	if got := cfg.IP(); got != "1.2.3.4" {
+		t.Errorf("explicit IP = %q", got)
+	}
+}
+
+func TestWarningsExposed(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "bad.conf"), "not an assignment\n. missing.conf\nGOOD=yes\n")
+	cfg, err := Load(filepath.Join(dir, "bad.conf"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Warnings()) == 0 {
+		t.Error("expected warnings to be exposed")
+	}
+}
+
+func TestGetDefault(t *testing.T) {
+	v := Values{"SET": "value", "EMPTY": "", "SPACES": "   "}
+	if got := v.GetDefault("SET", "fallback"); got != "value" {
+		t.Errorf("SET = %q", got)
+	}
+	for _, key := range []string{"EMPTY", "SPACES", "MISSING"} {
+		if got := v.GetDefault(key, "fallback"); got != "fallback" {
+			t.Errorf("%s = %q, want fallback", key, got)
+		}
+	}
+}
+
+func TestInvalidKeysAndLinesAreSkipped(t *testing.T) {
+	input := "9INVALID=value\nGOOD=yes\n\n# comment\nBAD LINE HERE\n"
+	p := NewParser(".")
+	values, err := p.ParseReader("test.conf", strings.NewReader(input))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if values["GOOD"] != "yes" {
+		t.Errorf("GOOD = %q", values["GOOD"])
+	}
+	if _, ok := values["9INVALID"]; ok {
+		t.Error("invalid key should be skipped")
+	}
+	if len(p.Warnings) != 2 {
+		t.Errorf("warnings = %v", p.Warnings)
+	}
+}
+
+func TestParseFileMissing(t *testing.T) {
+	p := NewParser(t.TempDir())
+	if _, err := p.ParseFile("nope.conf"); err == nil {
+		t.Error("expected error for missing file")
+	}
+}
+
+func TestParseReaderIncludeDepth(t *testing.T) {
+	dir := t.TempDir()
+	// A chain deeper than MaxDepth must error rather than recurse forever.
+	for i := 0; i < 25; i++ {
+		next := fmt.Sprintf("f%d.conf", i+1)
+		if i == 24 {
+			next = ""
+		}
+		content := "KEY=value\n"
+		if next != "" {
+			content += ". " + next + "\n"
+		}
+		writeFile(t, filepath.Join(dir, fmt.Sprintf("f%d.conf", i)), content)
+	}
+	p := NewParser(dir)
+	p.MaxDepth = 5
+	if _, err := p.ParseFile(filepath.Join(dir, "f0.conf")); err == nil {
+		t.Error("expected include depth error")
+	}
+}
+
+func TestExpansionWithBackslashes(t *testing.T) {
+	input := `A="one\\two"
+B="say \"hi\""
+C='single \ backslash'
+D=plain\value
+`
+	p := NewParser(".")
+	values, err := p.ParseReader("t.conf", strings.NewReader(input))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if values["A"] != `one\two` {
+		t.Errorf("A = %q", values["A"])
+	}
+	if values["B"] != `say "hi"` {
+		t.Errorf("B = %q", values["B"])
+	}
+	if values["C"] != `single \ backslash` {
+		t.Errorf("C = %q", values["C"])
+	}
+	if values["D"] != `plain\value` {
+		t.Errorf("D = %q", values["D"])
+	}
+}
+
+func TestUnterminatedQuote(t *testing.T) {
+	p := NewParser(".")
+	values, err := p.ParseReader("t.conf", strings.NewReader("A=\"unterminated\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if values["A"] != "unterminated" {
+		t.Errorf("A = %q", values["A"])
+	}
+}
+
+func TestUnterminatedSingleQuote(t *testing.T) {
+	p := NewParser(".")
+	values, err := p.ParseReader("t.conf", strings.NewReader("A='unterminated\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if values["A"] != "unterminated" {
+		t.Errorf("A = %q", values["A"])
+	}
+}
+
+func TestUnterminatedCommandSubstitution(t *testing.T) {
+	p := NewParser(".")
+	values, err := p.ParseReader("t.conf", strings.NewReader("A=$(cat file\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if values["A"] == "" {
+		t.Log("unterminated substitution produced empty value (acceptable)")
+	}
+}
+
+func TestDollarWithoutVariable(t *testing.T) {
+	p := NewParser(".")
+	values, err := p.ParseReader("t.conf", strings.NewReader("A=price$\nC=${UNCLOSED\nNET=192.168.77\nD=$NET.255\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if values["A"] != "price$" {
+		t.Errorf("A = %q", values["A"])
+	}
+	// An unclosed brace is left as literal text rather than swallowing the
+	// rest of the value.
+	if values["C"] != "${UNCLOSED" {
+		t.Errorf("C = %q", values["C"])
+	}
+	// The common real-world case from GLOBAL_DEST: a variable followed by a
+	// dot and digits must not be read as one long variable name.
+	if values["D"] != "192.168.77.255" {
+		t.Errorf("D = %q", values["D"])
+	}
+}
+
+func TestIncludeWithoutArgument(t *testing.T) {
+	p := NewParser(t.TempDir())
+	values, err := p.ParseReader("t.conf", strings.NewReader(".\nsource\nA=1\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if values["A"] != "1" {
+		t.Errorf("A = %q", values["A"])
+	}
+	if len(p.Warnings) != 2 {
+		t.Errorf("bare include lines should warn and be skipped: %v", p.Warnings)
+	}
+}
+
+func TestParseDestinationsQuoted(t *testing.T) {
+	got := ParseDestinations(`"255.255.255.255"`)
+	if len(got) != 1 || got[0] != "255.255.255.255" {
+		t.Errorf("quoted = %v", got)
+	}
+	got = ParseDestinations("[ ]")
+	if len(got) != 0 {
+		t.Errorf("empty list = %v", got)
+	}
+}
+
+func TestAtoiDefaultInvalid(t *testing.T) {
+	cfg := FromValues(Values{"HTTP_PORT": "not-a-number", "PROBE_TIME": "abc", "UPLOAD_MAX_SIZE_MB": ""})
+	if cfg.HTTPPort != 80 {
+		t.Errorf("HTTPPort = %d, want default 80", cfg.HTTPPort)
+	}
+	if cfg.ProbeTime != 10 {
+		t.Errorf("ProbeTime = %d, want default 10", cfg.ProbeTime)
+	}
+	if cfg.UploadMaxBytes != 5<<20 {
+		t.Errorf("UploadMaxBytes = %d, want 5MB", cfg.UploadMaxBytes)
+	}
+}
+
+func TestUploadHTTPPortFallback(t *testing.T) {
+	cfg := FromValues(Values{"DROOPY_PORT": ""})
+	if got := cfg.UploadHTTPPort(); got != 8080 {
+		t.Errorf("UploadHTTPPort = %d", got)
+	}
+}
+
+func TestValidateUploadSize(t *testing.T) {
+	cfg := FromValues(Values{"UPLOAD_MAX_SIZE_MB": "0"})
+	found := false
+	for _, err := range cfg.Validate() {
+		if strings.Contains(err.Error(), "UPLOAD_MAX_SIZE_MB") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected upload size validation error: %v", cfg.Validate())
+	}
+}
+
+func TestValidateMissingPirateboxFolder(t *testing.T) {
+	cfg := FromValues(Values{"PIRATEBOX_FOLDER": ""})
+	found := false
+	for _, err := range cfg.Validate() {
+		if strings.Contains(err.Error(), "PIRATEBOX_FOLDER") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected folder validation error: %v", cfg.Validate())
+	}
+}
+
+func TestDefaultsAreFullyResolved(t *testing.T) {
+	// A minimal config relies entirely on built-in defaults. Every path must
+	// come out absolute rather than keeping a literal "$PIRATEBOX_FOLDER".
+	cfg := FromValues(Values{})
+	for name, value := range map[string]string{
+		"WWW_FOLDER":   cfg.WwwFolder,
+		"WWW_CONTENT":  cfg.WwwContent,
+		"SHARE_FOLDER": cfg.ShareFolder,
+		"UPLOADFOLDER": cfg.UploadFolder,
+		"TIMESAVE":     cfg.Timesave,
+		"NODE_CONFIG":  cfg.NodeConfigPath,
+		"CHATFILE":     cfg.ChatFile,
+		"GEN_CHATFILE": cfg.GenChatFile,
+		"GEN_DISKFILE": cfg.GenDiskFile,
+		"LEASE_FILE":   cfg.LeaseFile,
+	} {
+		if strings.Contains(value, "$") {
+			t.Errorf("%s still contains an unexpanded reference: %q", name, value)
+		}
+		if !strings.HasPrefix(value, "/") {
+			t.Errorf("%s is not absolute: %q", name, value)
+		}
+	}
+	if cfg.NodeInterface != cfg.Interface {
+		t.Errorf("NODE_INTERFACE = %q, want %q", cfg.NodeInterface, cfg.Interface)
+	}
+	for _, dest := range cfg.GlobalDest {
+		if strings.Contains(dest, "$") {
+			t.Errorf("GLOBAL_DEST entry unresolved: %q", dest)
+		}
+	}
+}
+
+func TestDefaultsResolvedInMinimalConfigFile(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "minimal.conf"), "# only the essentials\nNET=10.0.0\nIP_SHORT=1\n")
+	cfg, err := Load(filepath.Join(dir, "minimal.conf"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.UploadFolder != "/opt/piratebox/share/Shared" {
+		t.Errorf("UploadFolder = %q", cfg.UploadFolder)
+	}
+	if cfg.HostsFile != "/opt/piratebox/conf/hosts_generated" {
+		t.Errorf("HostsFile = %q", cfg.HostsFile)
+	}
+}
+
+func TestResolveReferencesLeavesUnknownNames(t *testing.T) {
+	values := Values{
+		"KNOWN":   "value",
+		"USES":    "$KNOWN and $UNKNOWN",
+		"CYCLE_A": "$CYCLE_B",
+		"CYCLE_B": "$CYCLE_A",
+	}
+	resolved := resolveReferences(values)
+	if resolved["USES"] != "value and $UNKNOWN" {
+		t.Errorf("USES = %q", resolved["USES"])
+	}
+	// A cycle must terminate without growing without bound.
+	if len(resolved["CYCLE_A"]) > 100 {
+		t.Errorf("cycle grew: %q", resolved["CYCLE_A"])
+	}
+}
+
+func TestResolveReferencesBraced(t *testing.T) {
+	values := Values{"BASE": "/opt/pb", "SUB": "${BASE}/www", "MISSING": "${NOPE}/x"}
+	resolved := resolveReferences(values)
+	if resolved["SUB"] != "/opt/pb/www" {
+		t.Errorf("SUB = %q", resolved["SUB"])
+	}
+	if resolved["MISSING"] != "${NOPE}/x" {
+		t.Errorf("MISSING = %q", resolved["MISSING"])
 	}
 }

@@ -1,7 +1,9 @@
 package shoutbox
 
 import (
+	"bytes"
 	"context"
+	"log/slog"
 	"net"
 	"os"
 	"path/filepath"
@@ -325,4 +327,246 @@ func portOf(t *testing.T, addr string) int {
 		t.Fatal(err)
 	}
 	return port
+}
+
+func TestListenAndServeBindsAndStops(t *testing.T) {
+	// Use an ephemeral port via Addr so the test never collides with a
+	// running PirateBox on port 12556.
+	probe, err := net.ListenPacket("udp4", "127.0.0.1:0")
+	if err != nil {
+		t.Skipf("no udp loopback: %v", err)
+	}
+	addr := probe.LocalAddr().String()
+	probe.Close()
+
+	got := make(chan string, 1)
+	l := &Listener{
+		Addr: addr,
+		Handler: func(content string) error {
+			select {
+			case got <- content:
+			default:
+			}
+			return nil
+		},
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- l.ListenAndServe(ctx) }()
+
+	// The socket may need a moment to bind.
+	deadline := time.Now().Add(3 * time.Second)
+	msg := NewShoutboxMessage("sender")
+	msg.Set("via ListenAndServe")
+	var sendErr error
+	for time.Now().Before(deadline) {
+		sendErr = (UDPSender{}).Send("127.0.0.1", portOf(t, addr), []byte(msg.Wire()))
+		if sendErr == nil {
+			select {
+			case <-got:
+				goto received
+			case <-time.After(50 * time.Millisecond):
+			}
+		}
+	}
+	t.Fatalf("no message received, last send error: %v", sendErr)
+received:
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Errorf("listener returned %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("listener did not stop")
+	}
+}
+
+func TestListenAndServeBindFailure(t *testing.T) {
+	l := &Listener{Addr: "256.256.256.256:1"}
+	if err := l.ListenAndServe(context.Background()); err == nil {
+		t.Error("expected bind error for invalid address")
+	}
+}
+
+func TestStorePath(t *testing.T) {
+	store := NewStore("/tmp/chat.pso")
+	if store.Path() != "/tmp/chat.pso" {
+		t.Errorf("Path = %q", store.Path())
+	}
+}
+
+func TestGeneratePageCreatesDirectory(t *testing.T) {
+	dir := t.TempDir()
+	store := NewStore(filepath.Join(dir, "cgi-bin", "data.pso"))
+	out := filepath.Join(dir, "nested", "www", "chat_content.html")
+	if err := store.GeneratePage(out); err != nil {
+		t.Fatalf("GeneratePage should create missing directories: %v", err)
+	}
+	if _, err := os.Stat(out); err != nil {
+		t.Fatalf("generated page missing: %v", err)
+	}
+}
+
+func TestListenerHandlerErrorIsLogged(t *testing.T) {
+	var buf bytes.Buffer
+	l := &Listener{
+		Logger:  slog.New(slog.NewTextHandler(&buf, nil)),
+		Handler: func(string) error { return os.ErrInvalid },
+	}
+	msg := NewShoutboxMessage("x")
+	msg.Set("content")
+	l.Handle(msg.Wire())
+	if !strings.Contains(buf.String(), "handler failed") {
+		t.Errorf("handler error not logged: %q", buf.String())
+	}
+}
+
+func TestListenerMalformedPacketIsLogged(t *testing.T) {
+	var buf bytes.Buffer
+	l := &Listener{Logger: slog.New(slog.NewTextHandler(&buf, nil))}
+	// Valid prefix but invalid base64 payload.
+	l.Handle("piratebox;sb;01;name;not!base64")
+	if !strings.Contains(buf.String(), "malformed") {
+		t.Errorf("malformed packet not logged: %q", buf.String())
+	}
+}
+
+func TestListenerGeneralChatIsIgnored(t *testing.T) {
+	var buf bytes.Buffer
+	l := &Listener{Logger: slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))}
+	msg := NewMessage("box")
+	msg.Set("general")
+	l.Handle(msg.Wire())
+	if !strings.Contains(buf.String(), "non-shoutbox") {
+		t.Errorf("general chat should be logged at debug: %q", buf.String())
+	}
+}
+
+func TestListenerNilHandler(t *testing.T) {
+	l := &Listener{}
+	msg := NewShoutboxMessage("x")
+	msg.Set("content")
+	l.Handle(msg.Wire()) // must not panic
+}
+
+func TestBroadcasterUsesDefaultSenderAndPort(t *testing.T) {
+	conn, err := net.ListenPacket("udp4", "127.0.0.1:0")
+	if err != nil {
+		t.Skipf("no udp loopback: %v", err)
+	}
+	defer conn.Close()
+	port := conn.LocalAddr().(*net.UDPAddr).Port
+	b := &Broadcaster{Destinations: []string{"127.0.0.1"}, Port: port}
+	if err := b.Send("default-sender"); err != nil {
+		t.Fatalf("send: %v", err)
+	}
+	buf := make([]byte, 64)
+	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	n, _, err := conn.ReadFrom(buf)
+	if err != nil {
+		t.Fatalf("receive: %v", err)
+	}
+	if string(buf[:n]) != "default-sender" {
+		t.Errorf("received %q", buf[:n])
+	}
+}
+
+func TestBroadcasterLogsFailures(t *testing.T) {
+	var buf bytes.Buffer
+	fake := &fakeSender{failOn: "10.0.0.1", failCount: 1}
+	b := &Broadcaster{
+		Destinations: []string{"10.0.0.1"},
+		Sender:       fake,
+		Logger:       slog.New(slog.NewTextHandler(&buf, nil)),
+	}
+	if err := b.Send("x"); err == nil {
+		t.Error("expected error")
+	}
+	if !strings.Contains(buf.String(), "broadcast failed") {
+		t.Errorf("failure not logged: %q", buf.String())
+	}
+}
+
+func TestUDPSenderIPv6(t *testing.T) {
+	conn, err := net.ListenPacket("udp6", "[::1]:0")
+	if err != nil {
+		t.Skipf("no ipv6 loopback: %v", err)
+	}
+	defer conn.Close()
+	port := conn.LocalAddr().(*net.UDPAddr).Port
+	if err := (UDPSender{}).Send("::1", port, []byte("v6")); err != nil {
+		t.Fatalf("send: %v", err)
+	}
+	buf := make([]byte, 16)
+	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	n, _, err := conn.ReadFrom(buf)
+	if err != nil {
+		t.Fatalf("receive: %v", err)
+	}
+	if string(buf[:n]) != "v6" {
+		t.Errorf("received %q", buf[:n])
+	}
+}
+
+func TestUDPSenderBadAddress(t *testing.T) {
+	if err := (UDPSender{}).Send("256.256.256.256", 1, []byte("x")); err == nil {
+		t.Error("expected dial error")
+	}
+}
+
+func TestMessageSetDefaultsTypeAndName(t *testing.T) {
+	m := &Message{}
+	m.Set("content")
+	if m.Type != TypeGeneral {
+		t.Errorf("type = %q", m.Type)
+	}
+	if m.Sender() == "" {
+		t.Error("name should default to the hostname")
+	}
+	if _, err := m.Content(); err != nil {
+		t.Errorf("content: %v", err)
+	}
+}
+
+func TestMessageContentErrors(t *testing.T) {
+	m := &Message{decoded: "piratebox;sb;01;name"}
+	if _, err := m.Content(); err == nil {
+		t.Error("short message should fail")
+	}
+	m = &Message{decoded: "other;sb;01;name;aGk="}
+	if _, err := m.Content(); err == nil {
+		t.Error("wrong magic should fail")
+	}
+}
+
+func TestPrepareLinePlainTextFastPath(t *testing.T) {
+	at := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	line := PrepareLine("plain", "no special chars", "def", at)
+	if !strings.Contains(line, "no special chars") {
+		t.Errorf("line = %q", line)
+	}
+}
+
+func TestServeStopsCleanlyOnReadError(t *testing.T) {
+	// A listener whose connection fails immediately must return an error and
+	// leave no goroutine blocked on the context.
+	conn, err := net.ListenPacket("udp4", "127.0.0.1:0")
+	if err != nil {
+		t.Skipf("no udp loopback: %v", err)
+	}
+	l := &Listener{}
+	done := make(chan error, 1)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { done <- l.Serve(ctx, conn) }()
+	conn.Close()
+	select {
+	case err := <-done:
+		// Closing the socket from outside is reported as a read error or as
+		// a clean stop; both are acceptable as long as it returns.
+		_ = err
+	case <-time.After(3 * time.Second):
+		t.Fatal("Serve did not return after the connection closed")
+	}
 }

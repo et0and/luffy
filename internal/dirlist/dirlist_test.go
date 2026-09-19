@@ -222,3 +222,81 @@ func TestSizeLabels(t *testing.T) {
 		t.Errorf("dir size label = %q", got)
 	}
 }
+
+func TestServeFileDirectoryPath(t *testing.T) {
+	// A directory reached through the file path branch falls back to a
+	// listing; the redirect happens first for the URL without a slash.
+	root := setupTree(t)
+	h := New(root, "/content")
+	rec := get(t, h, "/content/photos/")
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "beach.jpg") {
+		t.Errorf("directory listing = %d", rec.Code)
+	}
+}
+
+func TestListingSkipsUnreadableEntries(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root bypasses permissions")
+	}
+	root := t.TempDir()
+	mustWrite(t, filepath.Join(root, "ok.txt"), "x")
+	if err := os.Mkdir(filepath.Join(root, "locked"), 0o000); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chmod(filepath.Join(root, "locked"), 0o755)
+	h := New(root, "/content")
+	rec := get(t, h, "/content/")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "ok.txt") {
+		t.Errorf("readable file missing: %s", rec.Body.String())
+	}
+}
+
+func TestListingWithRelativeURLEncoding(t *testing.T) {
+	root := t.TempDir()
+	mustWrite(t, filepath.Join(root, "a file with spaces.txt"), "x")
+	mustWrite(t, filepath.Join(root, "plus+sign.txt"), "y")
+	h := New(root, "/Shared")
+	body := get(t, h, "/Shared/").Body.String()
+	if !strings.Contains(body, "a%20file%20with%20spaces.txt") {
+		t.Errorf("spaces not escaped in href: %s", body)
+	}
+	// The download must work for the encoded name.
+	rec := get(t, h, "/Shared/a%20file%20with%20spaces.txt")
+	if rec.Code != http.StatusOK || rec.Body.String() != "x" {
+		t.Errorf("encoded download = %d %q", rec.Code, rec.Body.String())
+	}
+}
+
+func TestRelativePathRejectsSiblingPrefix(t *testing.T) {
+	root := setupTree(t)
+	h := New(root, "/content")
+	// A path that merely starts with the same characters must not match.
+	rec := get(t, h, "/contentx/notes.txt")
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want 404", rec.Code)
+	}
+}
+
+func TestListingEmptyDirectory(t *testing.T) {
+	root := t.TempDir()
+	h := New(root, "/content")
+	rec := get(t, h, "/content/")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "Directory Listing") {
+		t.Errorf("empty listing = %s", rec.Body.String())
+	}
+}
+
+func TestContentTypeTarballs(t *testing.T) {
+	if got := ContentType("archive.tar.bz2"); got != "application/x-tgz" && got == "" {
+		t.Errorf("tar.bz2 = %q", got)
+	}
+	if got := ContentType("noext"); got != "application/octet-stream" {
+		t.Errorf("no extension = %q", got)
+	}
+}

@@ -18,7 +18,6 @@ import (
 
 	"luffy/internal/config"
 	"luffy/internal/diskusage"
-	"luffy/internal/forum"
 	"luffy/internal/logging"
 	"luffy/internal/proc"
 	"luffy/internal/service"
@@ -46,6 +45,7 @@ Commands:
   timesave     store or recover the clock on devices without an RTC
   stations     print the number of connected clients
   hostname     change the visible hostname
+  flush-dns    signal dnsmasq to reload its hosts files
   version      print the version
 
 Global flags:
@@ -102,13 +102,20 @@ func run(args []string) int {
 
 	runner := proc.Runner(proc.Exec{LogDir: filepath.Join(cfg.PirateboxFolder, "tmp")})
 	if *dryRun {
-		runner = &dryRunRunner{inner: runner, logger: logger}
+		runner = &dryRunRunner{logger: logger}
 	}
 	manager := service.New(cfg, runner, logger)
 
 	switch command {
 	case "start", "serve":
-		return runServe(cfg, manager, runner, logger, command == "start")
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		defer stop()
+		return runServe(ctx, serveOptions{
+			cfg:         cfg,
+			manager:     manager,
+			logger:      logger,
+			withNetwork: command == "start",
+		})
 	case "stop":
 		if err := manager.Stop(context.Background()); err != nil {
 			logger.Error("stop failed", "error", err)
@@ -141,17 +148,38 @@ func run(args []string) int {
 		}
 		fmt.Println("Switching hostname to " + rest[0])
 		return 0
+	case "flush-dns":
+		if err := manager.FlushDNSMasq(context.Background()); err != nil {
+			logger.Error("dnsmasq reload failed", "error", err)
+			return 1
+		}
+		return 0
 	default:
 		fmt.Fprintf(os.Stderr, "unknown command %q\n\n%s", command, usageText)
 		return 2
 	}
 }
 
-func runServe(cfg *config.Config, manager *service.Manager, runner proc.Runner, logger *slog.Logger, withNetwork bool) int {
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
+// serveOptions configure runServe. The context and readiness hook are
+// injected so tests can drive a full server without signals.
+type serveOptions struct {
+	cfg         *config.Config
+	manager     *service.Manager
+	logger      *slog.Logger
+	withNetwork bool
+	// ready is called after every listener is bound. It may be nil.
+	ready func(server *web.Server)
+}
 
-	if withNetwork {
+func runServe(ctx context.Context, opts serveOptions) int {
+	// Cancelling this context stops every goroutine below. A listener error
+	// must cancel it too, otherwise wg.Wait would block forever.
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	cfg, manager, logger := opts.cfg, opts.manager, opts.logger
+
+	if opts.withNetwork {
 		if err := manager.Start(ctx); err != nil {
 			logger.Error("start failed", "error", err)
 			return 1
@@ -164,16 +192,16 @@ func runServe(cfg *config.Config, manager *service.Manager, runner proc.Runner, 
 	}
 
 	store := shoutbox.NewStore(cfg.ChatFile)
-	forumStore := newForumStore(cfg)
 	tracker := manager.StationsTracker()
 	du := diskusage.New(cfg.UploadFolder, cfg.GenDiskFile)
 
+	// web.New builds the forum store, content filesystem and broadcaster
+	// defaults from cfg, so only the pieces with live state are passed in.
 	server := web.New(web.Options{
 		Cfg:       cfg,
 		Logger:    logger,
 		Version:   version,
 		Shoutbox:  store,
-		Forum:     forumStore,
 		DiskUsage: du,
 		Stations:  tracker,
 	})
@@ -232,17 +260,21 @@ func runServe(cfg *config.Config, manager *service.Manager, runner proc.Runner, 
 		"upload", server.UploadListenAddr(),
 		"host", cfg.Host)
 
+	if opts.ready != nil {
+		opts.ready(server)
+	}
+
 	var serveErr error
 	select {
 	case <-ctx.Done():
 		logger.Info("shutdown signal received")
 	case serveErr = <-errc:
 		logger.Error("server error", "error", serveErr)
-		stop()
 	}
+	cancel()
 	wg.Wait()
 
-	if withNetwork {
+	if opts.withNetwork {
 		if err := manager.Stop(context.Background()); err != nil {
 			logger.Warn("stop failed", "error", err)
 		}
@@ -251,16 +283,6 @@ func runServe(cfg *config.Config, manager *service.Manager, runner proc.Runner, 
 		return 1
 	}
 	return 0
-}
-
-func newForumStore(cfg *config.Config) *forum.Store {
-	forumCfg := forum.Defaults(filepath.Join(cfg.ShareFolder, "forumspace"))
-	forumCfg.CGIURL = "/board/"
-	if cfg.Host != "" {
-		forumCfg.BoardDescription = "PirateBox Board. Put media reviews or questions here.<br>\n" +
-			`<A HREF="http://` + cfg.Host + `">Click here to go back to the main site</a> `
-	}
-	return forum.New(forumCfg)
 }
 
 func runStatus(cfg *config.Config, manager *service.Manager) int {
@@ -366,7 +388,6 @@ func runStations(cfg *config.Config, runner proc.Runner) int {
 
 // dryRunRunner logs commands instead of executing them.
 type dryRunRunner struct {
-	inner  proc.Runner
 	logger *slog.Logger
 }
 

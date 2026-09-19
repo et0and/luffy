@@ -240,12 +240,122 @@ func TestGenerateAll(t *testing.T) {
 	if err := gen.Generate(); err != nil {
 		t.Fatal(err)
 	}
-	for _, path := range gen.GeneratedPaths() {
-		if path == cfg.AvahiConf || path == cfg.RadvdConf {
-			continue // optional outputs: no schema and IPv6 disabled
-		}
+	for _, path := range []string{
+		cfg.HostsFile,
+		cfg.DNSMasqConf,
+		filepath.Join(cfg.PirateboxFolder, "conf", "lighttpd", "env"),
+	} {
 		if _, err := os.Stat(path); err != nil {
 			t.Errorf("%s missing: %v", path, err)
 		}
+	}
+}
+
+func TestGenerateWritesOptionalOutputs(t *testing.T) {
+	cfg, _ := testConfig(t, config.Values{
+		"IPV6_ENABLE": "yes",
+		"IPV6_ADVERT": "radvd",
+		"IPV6_PREFIX": "fdc0:ffea",
+		"IPV6_MASK":   "64",
+	})
+	if err := os.WriteFile(cfg.AvahiSchema, []byte("host-name=#####MASKED_HOSTNAME#####\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gen := New(cfg)
+	if err := gen.Generate(); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{
+		cfg.HostsFile, cfg.DNSMasqConf, cfg.RadvdConf,
+		filepath.Join(cfg.PirateboxFolder, "conf", "lighttpd", "env"),
+		cfg.AvahiConf,
+	} {
+		if _, err := os.Stat(path); err != nil {
+			t.Errorf("%s missing: %v", path, err)
+		}
+	}
+}
+
+func TestGenerateDNSMasqWithoutInterface(t *testing.T) {
+	cfg, _ := testConfig(t, config.Values{"DNSMASQ_INTERFACE": ""})
+	gen := New(cfg)
+	if err := gen.GenerateDNSMasq(); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := os.ReadFile(cfg.DNSMasqConf)
+	if strings.Contains(string(data), "interface=") {
+		t.Errorf("interface line should be omitted: %s", data)
+	}
+}
+
+func TestGenerateHostsWithoutStaticFile(t *testing.T) {
+	cfg, _ := testConfig(t, nil)
+	// conf/hosts does not exist in this fixture; generation must still work.
+	gen := New(cfg)
+	if err := gen.GenerateHosts(); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := os.ReadFile(cfg.HostsFile)
+	if !strings.Contains(string(data), "piratebox.lan") {
+		t.Errorf("hosts = %s", data)
+	}
+}
+
+func TestGenerateDNSMasqWithoutDefaultFile(t *testing.T) {
+	cfg, _ := testConfig(t, nil)
+	gen := New(cfg)
+	if err := gen.GenerateDNSMasq(); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := os.ReadFile(cfg.DNSMasqConf)
+	if !strings.Contains(string(data), "dhcp-range=") {
+		t.Errorf("dnsmasq config = %s", data)
+	}
+}
+
+func TestGenerateAvahiWithNodeHostname(t *testing.T) {
+	cfg, _ := testConfig(t, config.Values{
+		"NODE_CONFIG_ACTIVE": "yes",
+		"NODE_NAME":          "node5",
+		"NODE_GEN":           "yes",
+	})
+	if err := os.WriteFile(cfg.AvahiSchema, []byte("host-name=#####MASKED_HOSTNAME#####\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gen := New(cfg)
+	if err := gen.GenerateAvahi(); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := os.ReadFile(cfg.AvahiConf)
+	if string(data) != "host-name=node5_piratebox_lan\n" {
+		t.Errorf("avahi = %q", data)
+	}
+}
+
+func TestGenerateLighttpdEnvWithoutPythonPath(t *testing.T) {
+	cfg, _ := testConfig(t, config.Values{"PIRATEBOX_PYTHONPATH": ""})
+	gen := New(cfg)
+	if err := gen.GenerateLighttpdEnv(); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := os.ReadFile(filepath.Join(cfg.PirateboxFolder, "conf", "lighttpd", "env"))
+	if !strings.Contains(string(data), "SHOUTBOX_CHATFILE") {
+		t.Errorf("env = %s", data)
+	}
+}
+
+func TestGenerateHostsNodeWithoutIPv6Address(t *testing.T) {
+	cfg, _ := testConfig(t, config.Values{
+		"NODE_CONFIG_ACTIVE": "yes",
+		"NODE_NAME":          "node9",
+		"NODE_IPV6_IP":       "",
+	})
+	gen := New(cfg)
+	if err := gen.GenerateHosts(); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := os.ReadFile(cfg.HostsFile)
+	if strings.Contains(string(data), "node9") {
+		t.Errorf("node entry without an address should be omitted: %s", data)
 	}
 }

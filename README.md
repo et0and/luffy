@@ -93,6 +93,7 @@ luffy timesave save        store the clock for RTC-less devices
 luffy timesave recover     restore the stored clock
 luffy stations             print the connected client count
 luffy hostname mybox.lan   change the visible hostname
+luffy flush-dns            signal dnsmasq to reload its hosts files
 luffy version              print the version
 ```
 
@@ -153,7 +154,8 @@ luffy/
 
 ```sh
 go test ./...                 # unit and integration tests
-go test -cover ./internal/... # coverage per package
+go test -race ./...           # race detector
+go test -cover ./...          # coverage per package
 go vet ./...
 ```
 
@@ -161,6 +163,31 @@ Tests use a fake command runner (`internal/proc.Fake`) so network and
 service behaviour is verified without root access or real interfaces.
 Parity tests pin the byte-level output of the chat line, wire format and
 forum escaping to values captured from the Python implementation.
+
+The suite covers 89% of statements and the CI enforces an 85% floor.
+
+## Continuous integration and releases
+
+`.github/workflows/luffy-ci.yml` runs on every change under `luffy/`:
+
+* `gofmt` check and `go vet`
+* the full test suite on Linux and macOS
+* the test suite under the race detector on Linux
+* total coverage, published to the job summary with an 85% floor
+* cross-compilation for mips, mipsle, armv6, arm64 and amd64
+
+Releases are cut by pushing a tag:
+
+```sh
+git tag luffy-v1.0.0
+git push origin luffy-v1.0.0
+```
+
+`.github/workflows/luffy-release.yml` then verifies the tag, builds all
+five architectures, compresses the MIPS builds with UPX, writes
+`SHA256SUMS` and publishes a GitHub release with the binaries attached.
+The `luffy-v` prefix keeps these tags separate from the historical
+PirateBox tags.
 
 ## Licence
 

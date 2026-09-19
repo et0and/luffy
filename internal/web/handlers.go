@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 
+	"luffy/internal/diskusage"
 	"luffy/internal/shoutbox"
 	"luffy/internal/stations"
 	"luffy/internal/upload"
@@ -115,10 +116,13 @@ func (s *Server) handleShoutboxWrite(w http.ResponseWriter, r *http.Request) {
 	line := shoutbox.Line(name, data, color, r.PostFormValue("timestamp"),
 		s.opts.Cfg.ShoutboxClientTime, s.opts.Now())
 
-	if s.opts.Cfg.GlobalChat && len(s.opts.Cfg.GlobalDest) > 0 && s.opts.Broadcaster != nil {
+	if s.opts.Cfg.GlobalChat && len(s.opts.Cfg.GlobalDest) > 0 {
+		// Global chat broadcasts to the network and does not store locally,
+		// matching psogen.py when SHOUTBOX_BROADCAST_DESTINATIONS was set.
+		// The broadcaster destinations are fixed at construction, so this is
+		// safe under concurrent posts.
 		msg := shoutbox.NewShoutboxMessage(s.opts.Cfg.Host)
 		msg.Set(line)
-		s.opts.Broadcaster.Destinations = s.opts.Cfg.GlobalDest
 		if err := s.opts.Broadcaster.Send(msg.Wire()); err != nil {
 			s.opts.Logger.Warn("global chat broadcast failed", "error", err)
 		}
@@ -142,15 +146,12 @@ func (s *Server) handleDiskUsageRead(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	data, err := os.ReadFile(s.opts.Cfg.GenDiskFile)
 	if err != nil {
-		fmt.Fprint(w, diskusageFallback(s.opts.DiskUsage.Line()))
+		// The generated file is missing or unreadable: render the frame
+		// directly from the live measurement instead of a 500.
+		fmt.Fprint(w, diskusage.Page(s.opts.DiskUsage.Line()))
 		return
 	}
 	w.Write(data)
-}
-
-func diskusageFallback(line string) string {
-	return "<html><head><meta http-equiv='cache-control' content='no-cache'><title>DiskUsage Data</title></head><body>" +
-		line + "</body></html>"
 }
 
 // handleDiskUsageWrite implements cgi-bin/diskwrite.py with the five minute
@@ -257,6 +258,12 @@ func (s *Server) version() string {
 }
 
 func (s *Server) handleConfigJSON(w http.ResponseWriter, r *http.Request) {
+	if !s.opts.Cfg.PbxJSONGeneration {
+		// The original only generated the file when PBX_JSON_GENERATION was
+		// enabled, so treat it as absent rather than serving stale content.
+		http.NotFound(w, r)
+		return
+	}
 	data, err := s.ConfigJSON(ConfigModules{})
 	if err != nil {
 		http.Error(w, "json generation failed", http.StatusInternalServerError)

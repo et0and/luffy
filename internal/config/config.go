@@ -33,7 +33,6 @@ type Config struct {
 	ChatFile      string
 	GenChatFile   string
 	GenDiskFile   string
-	PbxJSONFile   string
 	LeaseFile     string
 	HostsFile     string
 	HostsMeshFile string
@@ -198,6 +197,23 @@ func Load(path string) (*Config, error) {
 	for k, v := range parsed {
 		values[k] = v
 	}
+	// The mesh node settings live in their own file, loaded by the original
+	// piratebox.conf through `. $NODE_CONFIG`. Load it the same way, after
+	// the main file so node values win.
+	nodePath := values.Get("NODE_CONFIG")
+	if nodePath != "" {
+		if _, err := os.Stat(nodePath); err == nil {
+			nodeParser := NewParser(filepath.Dir(nodePath))
+			nodeValues, err := nodeParser.ParseFile(nodePath)
+			if err != nil {
+				return nil, err
+			}
+			for k, v := range nodeValues {
+				values[k] = v
+			}
+			parser.Warnings = append(parser.Warnings, nodeParser.Warnings...)
+		}
+	}
 	cfg := FromValues(values)
 	cfg.Path = path
 	if len(parser.Warnings) > 0 {
@@ -217,7 +233,7 @@ func FromValues(values Values) *Config {
 	for k, v := range values {
 		merged[k] = v
 	}
-	values = merged
+	values = resolveReferences(merged)
 
 	cfg := &Config{Values: values}
 	cfg.PirateboxFolder = values.Get("PIRATEBOX_FOLDER")
@@ -233,7 +249,6 @@ func FromValues(values Values) *Config {
 	cfg.ChatFile = values.Get("CHATFILE")
 	cfg.GenChatFile = values.Get("GEN_CHATFILE")
 	cfg.GenDiskFile = values.Get("GEN_DISKFILE")
-	cfg.PbxJSONFile = values.Get("PBX_JSON_FILE")
 	cfg.LeaseFile = values.Get("LEASE_FILE_LOCATION")
 	cfg.HostsFile = filepath.Join(cfg.PirateboxFolder, "conf", "hosts_generated")
 	cfg.HostsMeshFile = filepath.Join(cfg.PirateboxFolder, "conf", "hosts_mesh")
@@ -284,7 +299,6 @@ func FromValues(values Values) *Config {
 	cfg.NodeIPv6SetIP = values.Yes("NODE_IPV6_SET_IP")
 
 	cfg.User = values.Get("LIGHTTPD_USER")
-	cfg.Group = values.Get("LIGHTTPD_GROUP")
 	cfg.HTTPAddr = values.Get("HTTP_ADDR")
 	cfg.HTTPPort = atoiDefault(values.Get("HTTP_PORT"), 80)
 	cfg.UploadMaxBytes = int64(atoiDefault(values.Get("UPLOAD_MAX_SIZE_MB"), 5)) << 20
@@ -294,7 +308,6 @@ func FromValues(values Values) *Config {
 	cfg.DroopyTxt = values.Get("DROOPY_TXT")
 	cfg.DroopyChmod = values.Get("DROOPY_CHMOD")
 	cfg.DroopyUserDir = values.Get("DROOPY_USERDIR")
-	cfg.DroopyUseUser = values.Yes("DROOPY_USE_USER")
 	cfg.CustomDirlistCopy = values.Yes("CUSTOM_DIRLIST_COPY")
 	cfg.PbxJSONGeneration = values.Yes("PBX_JSON_GENERATION")
 	cfg.ShoutboxEnabled = values.Yes("SHOUTBOX_ENABLED")
@@ -313,14 +326,6 @@ func (c *Config) IP() string {
 		return ip
 	}
 	return strings.TrimSuffix(c.Net+"."+c.IPShort, ".")
-}
-
-// DNSMasqInterfaceOrAll returns the interface dnsmasq should bind to.
-func (c *Config) DNSMasqInterfaceOrAll() string {
-	if c.DNSMasqInterface == "" {
-		return c.Interface
-	}
-	return c.DNSMasqInterface
 }
 
 // UploadHTTPPort returns the port of the droopy compatible upload listener.

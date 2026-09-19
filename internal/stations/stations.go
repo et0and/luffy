@@ -6,12 +6,11 @@ package stations
 import (
 	"context"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 
+	"luffy/internal/atomicfile"
 	"luffy/internal/proc"
 )
 
@@ -96,7 +95,7 @@ func (t *Tracker) Refresh(ctx context.Context) error {
 	t.mu.Lock()
 	t.count = count
 	t.mu.Unlock()
-	return writeFileAtomic(t.Path, []byte(Render(count)))
+	return atomicfile.WriteString(t.Path, Render(count))
 }
 
 // Run refreshes immediately and then on every tick until ctx is cancelled.
@@ -120,28 +119,4 @@ func (t *Tracker) Count() int {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	return t.count
-}
-
-func writeFileAtomic(path string, data []byte) error {
-	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return fmt.Errorf("stations: create dir: %w", err)
-	}
-	tmp, err := os.CreateTemp(dir, ".luffy-cnt-*")
-	if err != nil {
-		return fmt.Errorf("stations: temp file: %w", err)
-	}
-	tmpName := tmp.Name()
-	defer os.Remove(tmpName)
-	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
-		return fmt.Errorf("stations: write: %w", err)
-	}
-	if err := tmp.Close(); err != nil {
-		return fmt.Errorf("stations: close: %w", err)
-	}
-	if err := os.Rename(tmpName, path); err != nil {
-		return fmt.Errorf("stations: rename: %w", err)
-	}
-	return nil
 }

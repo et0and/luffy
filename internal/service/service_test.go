@@ -395,3 +395,290 @@ func TestStationsTrackerInterface(t *testing.T) {
 		t.Errorf("count = %d", tracker.Count())
 	}
 }
+
+func TestNewDefaultsRunnerAndLogger(t *testing.T) {
+	cfg := config.FromValues(config.Values{"PIRATEBOX_FOLDER": t.TempDir()})
+	m := New(cfg, nil, nil)
+	if m.Runner == nil || m.Logger == nil || m.Now == nil {
+		t.Errorf("New did not fill defaults: %+v", m)
+	}
+}
+
+func TestStartWithIWInterface(t *testing.T) {
+	m, fake, _, _ := testManager(t, config.Values{"DO_IW": "yes", "PHY_IF": "phy0"})
+	if err := m.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if !fake.Has("iw", "phy0", "interface", "add", "wlan0", "type", "managed") {
+		t.Errorf("iw command missing: %v", fake.Lines())
+	}
+	if err := m.Stop(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if !fake.Has("iw", "dev", "wlan0", "del") {
+		t.Errorf("iw delete missing: %v", fake.Lines())
+	}
+}
+
+func TestProbeInterfaceSucceedsWhenPresent(t *testing.T) {
+	m, fake, _, _ := testManager(t, config.Values{
+		"PROBE_INTERFACE": "yes",
+		"PROBE_TIME":      "3",
+	})
+	// The fake runner succeeds by default, so probing returns immediately.
+	if err := m.probeInterface(context.Background()); err != nil {
+		t.Fatalf("probe: %v", err)
+	}
+	if len(fake.Commands) != 1 {
+		t.Errorf("expected one probe attempt: %v", fake.Lines())
+	}
+}
+
+func TestProbeInterfaceContextCancelled(t *testing.T) {
+	m, fake, _, _ := testManager(t, config.Values{
+		"PROBE_INTERFACE": "yes",
+		"PROBE_TIME":      "10",
+	})
+	fake.Errors["ifconfig"] = errors.New("missing")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := m.probeInterface(ctx); err == nil {
+		t.Error("expected cancellation error")
+	}
+}
+
+func TestStopInterfaceSkipsWhenDisabled(t *testing.T) {
+	m, fake, _, _ := testManager(t, config.Values{"DO_IFCONFIG": "no", "DO_IW": "no"})
+	if err := m.stopInterface(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(fake.Commands) != 0 {
+		t.Errorf("no commands expected: %v", fake.Lines())
+	}
+}
+
+func TestStopProcessFallsBackToPkill(t *testing.T) {
+	m, fake, _, _ := testManager(t, nil)
+	m.stopProcess(context.Background(), "hostapd", "hostapd")
+	if !fake.Has("pkill", "-f", "hostapd") {
+		t.Errorf("pkill fallback missing: %v", fake.Lines())
+	}
+}
+
+func TestStopProcessIgnoresBadPidFile(t *testing.T) {
+	m, fake, cfg, _ := testManager(t, nil)
+	tmp := filepath.Join(cfg.PirateboxFolder, "tmp")
+	if err := os.MkdirAll(tmp, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(tmp, "dnsmasq.pid"), []byte("not-a-number\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	m.stopProcess(context.Background(), "dnsmasq", "dnsmasq")
+	if !fake.Has("pkill") {
+		t.Errorf("bad pid file should fall back to pkill: %v", fake.Lines())
+	}
+}
+
+func TestEmptyTmpMissingDirectory(t *testing.T) {
+	m, _, _, _ := testManager(t, nil)
+	if err := m.emptyTmp(); err != nil {
+		t.Errorf("missing tmp folder should not fail: %v", err)
+	}
+}
+
+func TestFirstRunSetupWritesInitDoneFailure(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root bypasses permissions")
+	}
+	m, _, cfg, _ := testManager(t, nil)
+	// A file where the conf directory belongs makes MkdirAll fail.
+	if err := os.WriteFile(filepath.Join(cfg.PirateboxFolder, "conf"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.FirstRunSetup(context.Background()); err == nil {
+		t.Error("expected setup error")
+	}
+}
+
+func TestPrepareShoutboxWithoutInitFile(t *testing.T) {
+	m, _, cfg, _ := testManager(t, config.Values{"RESET_CHAT": "yes"})
+	// conf/chat_init.txt does not exist: the chat is reset to empty.
+	if err := m.prepareShoutbox(); err != nil {
+		t.Fatalf("prepare shoutbox: %v", err)
+	}
+	data, err := os.ReadFile(cfg.ChatFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(data) != 0 {
+		t.Errorf("chat should be empty, got %q", data)
+	}
+}
+
+func TestPrepareShoutboxKeepsHistory(t *testing.T) {
+	m, _, cfg, _ := testManager(t, config.Values{"RESET_CHAT": "no"})
+	if err := os.MkdirAll(filepath.Dir(cfg.ChatFile), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(cfg.ChatFile, []byte("<div>existing</div>\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.prepareShoutbox(); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := os.ReadFile(cfg.ChatFile)
+	if !strings.Contains(string(data), "existing") {
+		t.Errorf("history lost: %q", data)
+	}
+}
+
+func TestCreateContentFolderExistingSkipsCopy(t *testing.T) {
+	m, _, cfg, _ := testManager(t, nil)
+	if err := os.MkdirAll(cfg.WwwContent, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.CreateContentFolder(); err != nil {
+		t.Fatal(err)
+	}
+	// An existing content folder is left untouched, so the shipped index is
+	// not copied in.
+	if _, err := os.Stat(filepath.Join(cfg.WwwContent, "index.html")); err == nil {
+		t.Error("existing content folder should not be repopulated")
+	}
+}
+
+func TestCopyAssetsSkipsExistingFiles(t *testing.T) {
+	target := t.TempDir()
+	if err := os.WriteFile(filepath.Join(target, "index.html"), []byte("custom"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := CopyAssets(target); err != nil {
+		t.Fatalf("copy assets: %v", err)
+	}
+	data, _ := os.ReadFile(filepath.Join(target, "index.html"))
+	if string(data) != "custom" {
+		t.Errorf("existing file overwritten: %q", data)
+	}
+	// Other files are still copied in.
+	if _, err := os.Stat(filepath.Join(target, "css", "page_style.css")); err != nil {
+		t.Errorf("css not copied: %v", err)
+	}
+}
+
+func TestCopyAssetsCreatesSubdirectories(t *testing.T) {
+	target := filepath.Join(t.TempDir(), "deep", "nested")
+	if err := CopyAssets(target); err != nil {
+		t.Fatalf("copy assets: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(target, "js", "scripts.js")); err != nil {
+		t.Errorf("nested asset missing: %v", err)
+	}
+}
+
+func TestDistributeFilesMissingSource(t *testing.T) {
+	root := t.TempDir()
+	if err := DistributeFiles(root, filepath.Join(t.TempDir(), "empty"), false); err != nil {
+		t.Errorf("missing source files should not fail: %v", err)
+	}
+}
+
+func TestRemovePartialUploadsMissingDirectory(t *testing.T) {
+	removed, err := RemovePartialUploads(filepath.Join(t.TempDir(), "missing"))
+	if err != nil || removed != 0 {
+		t.Errorf("RemovePartialUploads = %d, %v", removed, err)
+	}
+}
+
+func TestDeleteEmptyFilesMissingRoot(t *testing.T) {
+	deleted, err := DeleteEmptyFiles(filepath.Join(t.TempDir(), "missing"))
+	if err != nil || deleted != 0 {
+		t.Errorf("DeleteEmptyFiles = %d, %v", deleted, err)
+	}
+}
+
+func TestSetHostnameWithoutConfigPath(t *testing.T) {
+	_, _, cfg, _ := testManager(t, nil)
+	cfg.Path = ""
+	if err := SetHostname(cfg, "box.lan"); err != nil {
+		t.Fatalf("set hostname without config: %v", err)
+	}
+	if cfg.Host != "box.lan" {
+		t.Errorf("host = %q", cfg.Host)
+	}
+}
+
+func TestSetHostnameUnwritableConfig(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root bypasses permissions")
+	}
+	_, _, cfg, base := testManager(t, nil)
+	confPath := filepath.Join(base, "readonly.conf")
+	if err := os.WriteFile(confPath, []byte("HOST=\"old\"\n"), 0o400); err != nil {
+		t.Fatal(err)
+	}
+	cfg.Path = confPath
+	if err := SetHostname(cfg, "new.lan"); err == nil {
+		t.Error("expected error writing read-only config")
+	}
+}
+
+func TestStartCleansUploadFolder(t *testing.T) {
+	m, _, cfg, _ := testManager(t, nil)
+	if err := os.MkdirAll(cfg.UploadFolder, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeTestFile(filepath.Join(cfg.UploadFolder, "empty"), ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeTestFile(filepath.Join(cfg.UploadFolder, "tmpdroopy1"), "partial"); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeTestFile(filepath.Join(cfg.UploadFolder, "keep.txt"), "real"); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(cfg.UploadFolder, "empty")); err == nil {
+		t.Error("zero byte upload should be removed on start")
+	}
+	if _, err := os.Stat(filepath.Join(cfg.UploadFolder, "tmpdroopy1")); err == nil {
+		t.Error("partial upload should be removed on start")
+	}
+	if _, err := os.Stat(filepath.Join(cfg.UploadFolder, "keep.txt")); err != nil {
+		t.Errorf("real file should be kept: %v", err)
+	}
+}
+
+func TestStartSkipsUploadCleanupWhenDisabled(t *testing.T) {
+	m, _, cfg, _ := testManager(t, config.Values{"DROOPY_ENABLED": "no"})
+	if err := os.MkdirAll(cfg.UploadFolder, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeTestFile(filepath.Join(cfg.UploadFolder, "empty"), ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(cfg.UploadFolder, "empty")); err != nil {
+		t.Error("cleanup should not run when uploads are disabled")
+	}
+}
+
+func TestHooksHaveTimeout(t *testing.T) {
+	m, _, _, _ := testManager(t, nil)
+	if m.Hooks().Timeout <= 0 {
+		t.Error("production hook runner must set a timeout")
+	}
+}
+
+func TestSetHostnameRejectsNewlines(t *testing.T) {
+	_, _, cfg, _ := testManager(t, nil)
+	for _, bad := range []string{"a\nb", "a\rb", "a\nHOST=\"evil\""} {
+		if err := SetHostname(cfg, bad); err == nil {
+			t.Errorf("SetHostname(%q) should be rejected", bad)
+		}
+	}
+}

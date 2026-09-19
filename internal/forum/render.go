@@ -147,8 +147,18 @@ func (s *Store) RenderIndex(summaries []Summary, total, offset int) string {
 
 // RenderThread renders a single thread page.
 func (s *Store) RenderThread(thread *Thread, offset int) string {
+	return s.RenderThreadWithError(thread, offset, "")
+}
+
+// RenderThreadWithError renders a thread page with an optional error banner,
+// matching how forest.py printed post errors after the header.
+func (s *Store) RenderThreadWithError(thread *Thread, offset int, errMsg string) string {
 	var b strings.Builder
 	b.WriteString(s.htmlTop())
+	if errMsg != "" {
+		b.WriteString(errMsg)
+		b.WriteString("\n")
+	}
 	if links := s.RenderPagingLinks(offset, thread.Total, s.cfg.ThreadPageSize, thread.Hash); links != "" {
 		b.WriteString(links)
 		b.WriteString("\n")
