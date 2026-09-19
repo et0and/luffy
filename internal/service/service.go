@@ -35,9 +35,8 @@ type Manager struct {
 	// Now can be replaced in tests.
 	Now func() time.Time
 
-	mu       sync.Mutex
-	started  bool
-	stopOnce sync.Once
+	mu      sync.Mutex
+	started bool
 }
 
 // New returns a manager for cfg.
@@ -49,14 +48,6 @@ func New(cfg *config.Config, runner proc.Runner, logger *slog.Logger) *Manager {
 		logger = slog.Default()
 	}
 	return &Manager{Cfg: cfg, Runner: runner, Logger: logger, Now: time.Now}
-}
-
-// Result describes the outcome of one lifecycle step.
-type Result struct {
-	Step string
-	Err  error
-	// Fatal marks a step that must stop the sequence.
-	Fatal bool
 }
 
 // Start runs the startup sequence from init.d/piratebox.
