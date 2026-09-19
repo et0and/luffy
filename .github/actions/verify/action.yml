@@ -1,0 +1,37 @@
+name: Verify luffy
+description: >
+  Check that the tree is gofmt clean, run go vet and run the test suite.
+  Used by both the CI and release workflows so the two can never disagree
+  about what "passing" means.
+
+inputs:
+  race:
+    description: Also run the test suite under the race detector.
+    required: false
+    default: "false"
+
+runs:
+  using: composite
+  steps:
+    - name: Verify formatting
+      shell: bash
+      run: |
+        unformatted=$(gofmt -l .)
+        if [ -n "$unformatted" ]; then
+          echo "These files are not gofmt clean:"
+          echo "$unformatted"
+          exit 1
+        fi
+
+    - name: Vet
+      shell: bash
+      run: go vet ./...
+
+    - name: Test
+      shell: bash
+      run: go test -timeout 5m ./...
+
+    - name: Test with the race detector
+      if: inputs.race == 'true'
+      shell: bash
+      run: go test -race -timeout 5m ./...

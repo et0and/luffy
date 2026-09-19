@@ -1,0 +1,21 @@
+name: Set up Go for luffy
+description: >
+  Install the Go toolchain selected by go.mod, with module and build
+  caching. The repository must be checked out before this action is used,
+  because it is a local action.
+
+runs:
+  using: composite
+  steps:
+    - name: Install Go
+      # actions/setup-go v7.0.0
+      uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+      with:
+        # Track the version declared in go.mod so the toolchain and CI never
+        # drift apart.
+        go-version-file: go.mod
+        # luffy has no third-party dependencies, so there is no go.sum. The
+        # action runs from the repository root while the module lives in
+        # The module has no dependencies, so point the cache key at the
+        # module file explicitly rather than at a go.sum that does not exist.
+        cache-dependency-path: go.mod

@@ -1,0 +1,16 @@
+version: 2
+
+updates:
+  # Keep the pinned action SHAs in .github/workflows fresh. Pinning to a
+  # commit SHA is the safe default; this keeps the pins from going stale.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "ci"
+    groups:
+      github-actions:
+        patterns:
+          - "*"

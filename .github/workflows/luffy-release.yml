@@ -1,0 +1,133 @@
+name: luffy release
+
+# Tag a commit to publish router binaries:
+#
+#   git tag luffy-v1.0.0
+#   git push origin luffy-v1.0.0
+#
+# The luffy-v prefix keeps releases ordered predictably; the historical
+# PirateBox tags (v0.6G, 1.1.4 and so on) are not part of this repository.
+#
+# Every action is pinned to a commit SHA. Dependabot (.github/dependabot.yml)
+# keeps the pins fresh.
+
+on:
+  push:
+    tags:
+      - "luffy-v*"
+
+permissions:
+  contents: write
+
+jobs:
+  verify:
+    name: verify
+    runs-on: ubuntu-latest
+    steps:
+      # actions/checkout v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - uses: ./.github/actions/setup
+
+      - uses: ./.github/actions/verify
+
+  release:
+    name: build and publish
+    needs: verify
+    runs-on: ubuntu-latest
+    steps:
+      # actions/checkout v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+
+      - uses: ./.github/actions/setup
+
+      - name: Resolve the version from the tag
+        id: version
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=${tag#luffy-v}" >> "$GITHUB_OUTPUT"
+
+      # The same composite action CI uses, so a release can never be built
+      # with different flags than the ones that passed the tests.
+      - name: Build mips (TL-MR3020 and similar routers)
+        uses: ./.github/actions/build-target
+        with:
+          name: luffy-linux-mips-softfloat
+          goarch: mips
+          gomips: softfloat
+          version: ${{ steps.version.outputs.version }}
+
+      - name: Build mipsle
+        uses: ./.github/actions/build-target
+        with:
+          name: luffy-linux-mipsle-softfloat
+          goarch: mipsle
+          gomips: softfloat
+          version: ${{ steps.version.outputs.version }}
+
+      - name: Build armv6 (Raspberry Pi 1 and Zero)
+        uses: ./.github/actions/build-target
+        with:
+          name: luffy-linux-armv6
+          goarch: arm
+          goarm: "6"
+          version: ${{ steps.version.outputs.version }}
+
+      - name: Build arm64 (Raspberry Pi 3, 4, 5 and 64-bit boards)
+        uses: ./.github/actions/build-target
+        with:
+          name: luffy-linux-arm64
+          goarch: arm64
+          version: ${{ steps.version.outputs.version }}
+
+      - name: Build amd64 (any x86-64 Linux host)
+        uses: ./.github/actions/build-target
+        with:
+          name: luffy-linux-amd64
+          goarch: amd64
+          version: ${{ steps.version.outputs.version }}
+
+      - name: Compress the router binaries
+        run: |
+          set -euo pipefail
+          # A TL-MR3020 has 4 MB of flash; UPX brings the MIPS build under it.
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq upx-ucl
+          upx --best --lzma dist/luffy-linux-mips-softfloat
+          upx --best --lzma dist/luffy-linux-mipsle-softfloat
+          ls -la dist
+
+      - name: Generate checksums
+        run: |
+          cd dist
+          sha256sum luffy-* > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Publish the GitHub release
+        # softprops/action-gh-release v3.0.3
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64
+        with:
+          name: luffy ${{ steps.version.outputs.tag }}
+          tag_name: ${{ github.ref_name }}
+          generate_release_notes: true
+          body: |
+            Static Linux builds of luffy ${{ steps.version.outputs.version }}.
+
+            | File | Target |
+            | --- | --- |
+            | `luffy-linux-mips-softfloat` | TP-Link TL-MR3020 and other big-endian MIPS routers (UPX compressed) |
+            | `luffy-linux-mipsle-softfloat` | Little-endian MIPS routers (UPX compressed) |
+            | `luffy-linux-armv6` | Raspberry Pi 1/Zero and older ARM boards |
+            | `luffy-linux-arm64` | Raspberry Pi 3/4/5 and 64-bit ARM boards |
+            | `luffy-linux-amd64` | Any x86-64 Linux host |
+
+            Install the binary as `/usr/bin/luffy` and use
+            `init.d/luffy.openwrt` or `init.d/luffy.service`.
+            See the installation guide in the README.
+            Verify downloads with `SHA256SUMS`.
+          files: |
+            dist/luffy-linux-*
+            dist/SHA256SUMS

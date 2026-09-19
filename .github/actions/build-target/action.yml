@@ -1,0 +1,45 @@
+name: Build a luffy target
+description: >
+  Cross-compile a static luffy binary for one target. Used by the CI
+  cross-compile matrix and by the release workflow so a release can never
+  be built with different flags than CI verified.
+
+inputs:
+  name:
+    description: Output file name inside dist/.
+    required: true
+  goarch:
+    description: Target GOARCH, for example mips or arm64.
+    required: true
+  goarm:
+    description: Target GOARM for 32-bit ARM builds.
+    required: false
+    default: ""
+  gomips:
+    description: Target GOMIPS, for example softfloat.
+    required: false
+    default: ""
+  version:
+    description: Version string injected into the binary.
+    required: false
+    default: dev
+
+runs:
+  using: composite
+  steps:
+    - name: Build
+      shell: bash
+      env:
+        CGO_ENABLED: "0"
+        GOOS: linux
+        GOARCH: ${{ inputs.goarch }}
+        GOARM: ${{ inputs.goarm }}
+        GOMIPS: ${{ inputs.gomips }}
+        VERSION: ${{ inputs.version }}
+        NAME: ${{ inputs.name }}
+      run: |
+        set -euo pipefail
+        mkdir -p dist
+        go build -trimpath -ldflags "-s -w -X main.version=$VERSION" \
+          -o "dist/$NAME" ./cmd/luffy
+        ls -la "dist/$NAME"

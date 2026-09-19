@@ -1,0 +1,124 @@
+name: luffy CI
+
+# Continuous integration. Everything in this repository is luffy, so the
+# workflow runs on every push and pull request.
+#
+# Every action is pinned to a commit SHA. Dependabot (.github/dependabot.yml)
+# keeps the pins fresh.
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # The router target is Linux, but luffy must also build and behave on
+        # the machines people develop on.
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      # actions/checkout v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - uses: ./.github/actions/setup
+
+      - uses: ./.github/actions/verify
+        with:
+          race: ${{ runner.os == 'Linux' }}
+
+  coverage:
+    name: coverage
+    runs-on: ubuntu-latest
+    steps:
+      # actions/checkout v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - uses: ./.github/actions/setup
+
+      - name: Measure coverage
+        run: |
+          go test -timeout 5m -covermode=atomic -coverprofile=coverage.out ./... >/dev/null
+
+      - name: Report and enforce the floor
+        run: |
+          total=$(go tool cover -func=coverage.out | tail -1 | awk '{print $3}')
+          echo "Total coverage: $total"
+          {
+            echo "### luffy test coverage"
+            echo
+            echo "\`\`\`"
+            go tool cover -func=coverage.out | tail -1
+            echo "\`\`\`"
+            echo
+            echo "<details><summary>Per package</summary>"
+            echo
+            echo "\`\`\`"
+            go test -cover ./... 2>/dev/null | grep -E 'coverage:' || true
+            echo "\`\`\`"
+            echo
+            echo "</details>"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          # Keep the suite from silently rotting. Raise this as coverage
+          # improves; never lower it without a reason in the commit message.
+          floor=85.0
+          value=${total%\%}
+          if awk "BEGIN {exit !($value < $floor)}"; then
+            echo "::error::coverage $total is below the ${floor}% floor"
+            exit 1
+          fi
+
+      - name: Upload the coverage profile
+        # actions/upload-artifact v7.0.1
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: luffy-coverage
+          path: coverage.out
+          retention-days: 14
+
+  cross-compile:
+    name: cross-compile ${{ matrix.goarch }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # TL-MR3020 and similar OpenWrt routers.
+          - goarch: mips
+            gomips: softfloat
+          - goarch: mipsle
+            gomips: softfloat
+          - goarch: arm
+            goarm: "6"
+          - goarch: arm64
+          - goarch: amd64
+    steps:
+      # actions/checkout v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - uses: ./.github/actions/setup
+
+      - uses: ./.github/actions/build-target
+        with:
+          name: luffy-${{ matrix.goarch }}
+          goarch: ${{ matrix.goarch }}
+          goarm: ${{ matrix.goarm }}
+          gomips: ${{ matrix.gomips }}
+          version: ci
+
+      - name: Check the binary runs on this architecture
+        if: matrix.goarch == 'amd64'
+        run: dist/luffy-amd64 version
+
+      - name: Record the binary size
+        run: |
+          ls -la dist/luffy-${{ matrix.goarch }}
+          echo "size: $(du -h dist/luffy-${{ matrix.goarch }} | cut -f1)" >> "$GITHUB_STEP_SUMMARY"
