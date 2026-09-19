@@ -63,7 +63,7 @@ func (m *Manager) Start(ctx context.Context) error {
 	if err := m.FirstRunSetup(ctx); err != nil {
 		return err
 	}
-	if err := m.generateConfigs(); err != nil {
+	if err := m.GenerateConfigs(); err != nil {
 		return err
 	}
 	if err := m.runHooks(ctx, hooks.StartStages()); err != nil {
@@ -255,8 +255,10 @@ func (m *Manager) CreatePart2Layout() error {
 	return nil
 }
 
-// generateConfigs writes hosts, dnsmasq, radvd, lighttpd env and avahi files.
-func (m *Manager) generateConfigs() error {
+// GenerateConfigs writes hosts, dnsmasq, radvd, lighttpd env and avahi
+// files. Start calls this automatically; the setup command exposes it so an
+// operator can inspect the generated files before the first start.
+func (m *Manager) GenerateConfigs() error {
 	generator := sysconfig.New(m.Cfg)
 	if err := generator.Generate(); err != nil {
 		return err

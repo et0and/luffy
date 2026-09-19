@@ -127,6 +127,12 @@ func run(args []string) int {
 			logger.Error("setup failed", "error", err)
 			return 1
 		}
+		// Generate the derived files too, so they can be reviewed before
+		// the first start.
+		if err := manager.GenerateConfigs(); err != nil {
+			logger.Error("config generation failed", "error", err)
+			return 1
+		}
 		fmt.Println("Setup complete.")
 		return 0
 	case "status":
