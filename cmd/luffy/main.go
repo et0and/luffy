@@ -45,6 +45,7 @@ Commands:
   shoutbox     chat helper commands
   timesave     store or recover the clock on devices without an RTC
   stations     print the number of connected clients
+  hostname     change the visible hostname
   version      print the version
 
 Global flags:
@@ -129,6 +130,17 @@ func run(args []string) int {
 		return runTimesave(cfg, rest)
 	case "stations":
 		return runStations(cfg, runner)
+	case "hostname":
+		if len(rest) < 1 {
+			fmt.Fprintln(os.Stderr, "usage: luffy hostname <name>")
+			return 2
+		}
+		if err := service.SetHostname(cfg, rest[0]); err != nil {
+			logger.Error("hostname change failed", "error", err)
+			return 1
+		}
+		fmt.Println("Switching hostname to " + rest[0])
+		return 0
 	default:
 		fmt.Fprintf(os.Stderr, "unknown command %q\n\n%s", command, usageText)
 		return 2

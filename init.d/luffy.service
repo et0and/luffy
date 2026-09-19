@@ -1,0 +1,16 @@
+[Unit]
+Description=Luffy PirateBox service
+Documentation=https://github.com/et0and/PirateBoxScripts_Webserver
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/luffy --config /opt/piratebox/conf/piratebox.conf start
+ExecStop=/usr/bin/luffy --config /opt/piratebox/conf/piratebox.conf stop
+Restart=on-failure
+RestartSec=5s
+LimitNOFILE=1024
+
+[Install]
+WantedBy=multi-user.target

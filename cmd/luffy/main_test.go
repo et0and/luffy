@@ -143,3 +143,28 @@ func TestRunStationsUsesConfiguredInterface(t *testing.T) {
 		t.Errorf("stations exit code = %d", code)
 	}
 }
+
+func TestRunHostname(t *testing.T) {
+	dir := t.TempDir()
+	path := writeConfig(t, dir, "")
+	if code := run([]string{"--config", path, "hostname", "mybox.lan"}); code != 0 {
+		t.Fatalf("hostname exit code = %d", code)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), `HOST="mybox.lan"`) {
+		t.Errorf("config not updated: %s", data)
+	}
+	page, err := os.ReadFile(filepath.Join(dir, "www", "index.html"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(page), "mybox.lan") {
+		t.Errorf("redirect page not written: %s", page)
+	}
+	if code := run([]string{"--config", path, "hostname"}); code != 2 {
+		t.Errorf("missing argument exit code = %d, want 2", code)
+	}
+}
