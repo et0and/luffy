@@ -18,7 +18,8 @@ and lighttpd dependencies.
 | `python_lib/messages.py`, `broadcast.py`, `discover.py` | `internal/shoutbox` |
 | `www/cgi-bin/*.py` | `internal/web` handlers |
 | `bin/droopy` | `internal/upload` |
-| `src/forest.py` | `internal/forum` |
+| `src/forest.py` (optional Python forum) | `internal/forum` |
+| Kareha imageboard (Perl, downloaded at install) | not ported, see below |
 | `python_lib/diskusage.py`, `psutil.py` | `internal/diskusage` |
 | `bin/station_cnt.sh` | `internal/stations` |
 | `bin/timesave.sh` | `internal/timesave` |
@@ -115,6 +116,16 @@ Global flags: `--config PATH`, `--log-level debug|info|warn|error`,
   `/library/test/success.html`.
 * The `bin/hooks/*.sh` scripts still run with the configuration path as the
   first argument.
+
+## What is not ported
+
+* The Kareha imageboard is a third-party Perl CGI script that the installer
+  downloaded at runtime. Luffy replaces it with the built-in Go forum
+  (`/board/`). The Perl script and its `config.pl` are left in the tree for
+  anyone who wants to keep running it behind another web server.
+* The Raspberry Pi helper scripts (`rpi/bin/*`) handle I2C real time clocks
+  and SD card partitioning. They are hardware specific and stay as they are.
+* `src/kareha.pl` and `src/kareha_img_config.pl` are not used by luffy.
 
 ## Layout
 

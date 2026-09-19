@@ -306,13 +306,8 @@ func runShoutbox(cfg *config.Config, args []string) int {
 			fmt.Fprintln(os.Stderr, "usage: luffy shoutbox post \"message\"")
 			return 2
 		}
-		line := shoutbox.PrepareLine("luffy", strings.Join(args[1:], " "), "def", timeNow())
-		content, err := store.Prepend(line)
-		if err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			return 1
-		}
-		if err := store.Replace(content); err != nil {
+		line := shoutbox.PrepareLine("luffy", strings.Join(args[1:], " "), "def", time.Now())
+		if _, err := store.Prepend(line); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			return 1
 		}
@@ -384,5 +379,3 @@ func (d *dryRunRunner) Start(_ context.Context, cmd proc.Command) (int, error) {
 	d.logger.Info("dry-run", "command", cmd.String())
 	return 0, nil
 }
-
-func timeNow() time.Time { return time.Now() }
