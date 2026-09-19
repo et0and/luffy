@@ -127,7 +127,7 @@ func Defaults() Values {
 		"PROBE_TIME":                "10",
 		"USE_APN":                   "yes",
 		"USE_DNSMASQ":               "yes",
-		"HOST":                      "piratebox.lan",
+		"HOST":                      "luffy.lan",
 		"INTERFACE":                 "wlan0",
 		"DNSMASQ_INTERFACE":         "wlan0",
 		"DO_BRIDGE":                 "no",

@@ -56,9 +56,9 @@ func Defaults(dataPath string) Config {
 		DataPath:   dataPath,
 		CGIURL:     "/board/",
 		CSSPath:    "/content/css/forest.css",
-		BoardTitle: "PirateBox Board",
-		BoardDescription: "PirateBox Board. Put media reviews or questions here.<br>\n" +
-			`<A HREF="http://piratebox.lan">Click here to go back to the main site</a> `,
+		BoardTitle: "Luffy Board",
+		BoardDescription: "Luffy Board. Put media reviews or questions here.<br>\n" +
+			`<A HREF="http://luffy.lan">Click here to go back to the main site</a> `,
 		AnonAuthor:     "Anonymous Coward",
 		IndexPageSize:  20,
 		ThreadPageSize: 20,

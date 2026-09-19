@@ -19,7 +19,7 @@ and lighttpd dependencies.
 | `www/cgi-bin/*.py` | `internal/web` handlers |
 | `bin/droopy` | `internal/upload` |
 | `src/forest.py` (optional Python forum) | `internal/forum` |
-| Kareha imageboard (Perl, downloaded at install) | not ported, see below |
+| Kareha imageboard (Perl, downloaded at install) | `internal/forum`, which the original also shipped |
 | `python_lib/diskusage.py`, `psutil.py` | `internal/diskusage` |
 | `bin/station_cnt.sh` | `internal/stations` |
 | `bin/timesave.sh` | `internal/timesave` |
@@ -115,7 +115,7 @@ Browse to `http://192.168.1.1`, then:
 
 1. Network, Wireless, Edit on the radio.
 2. Set Mode to `Access Point`.
-3. Set ESSID to `PirateBox - Share Freely`.
+3. Set ESSID to `Luffy - Share Freely`.
 4. Set Encryption to `No Encryption` (an open network, as PirateBox
    intends).
 5. Set Channel to `1`.
@@ -197,7 +197,7 @@ IP_SHORT=1
 NETMASK=255.255.255.0
 
 # The name clients see in the browser.
-HOST="piratebox.lan"
+HOST="luffy.lan"
 
 # Set this to the access point interface from `iw dev`, for the client
 # counter. It is often wlan0, and phy0-ap0 on newer OpenWrt releases.
@@ -230,8 +230,8 @@ the DHCP server.
 
 **10. Connect and check.**
 
-Join the `PirateBox - Share Freely` WiFi network and open
-`http://piratebox.lan` or `http://192.168.77.1`. You should see the start
+Join the `Luffy - Share Freely` WiFi network and open
+`http://luffy.lan` or `http://192.168.77.1`. You should see the start
 page with the chat box and the upload area. Opening any other address also
 lands on the start page, which is the captive portal behaviour.
 
@@ -312,7 +312,7 @@ INTERFACE="wlan0"
 DNSMASQ_INTERFACE="wlan0"
 NET=192.168.77
 IP_SHORT=1
-HOST="piratebox.lan"
+HOST="luffy.lan"
 USE_APN="yes"
 USE_DNSMASQ="yes"
 EOF
@@ -427,13 +427,21 @@ Global flags: `--config PATH`, `--log-level debug|info|warn|error`,
 
 ## What is not ported
 
-* The Kareha imageboard is a third-party Perl CGI script that the installer
-  downloaded at runtime. Luffy replaces it with the built-in Go forum
-  (`/board/`). The Perl script and its `config.pl` are left in the tree for
-  anyone who wants to keep running it behind another web server.
+* The Kareha imageboard. It is a third-party Perl CGI script that the
+  installer downloaded at runtime, and it needs Perl plus Image::Magick for
+  thumbnails. Luffy runs no Perl, so `/board/` is served by the built-in Go
+  forum instead.
+
+  This is a substitution, not a gap. The original treated the two boards as
+  alternatives chosen at install time: Kareha lived at `/board/` and the
+  Python forum at `/cgi-bin/forest.py`, and nothing in the shipped web
+  content linked to the forum. Luffy serves forest at both URLs, so the
+  front page's Forum link works with no runtime dependencies.
+
+  A board created with Kareha is not read. Luffy writes the forest format.
+
 * The Raspberry Pi helper scripts (`rpi/bin/*`) handle I2C real time clocks
   and SD card partitioning. They are hardware specific and stay as they are.
-* `src/kareha.pl` and `src/kareha_img_config.pl` are not used by luffy.
 
 ## Layout
 

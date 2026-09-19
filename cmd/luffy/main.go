@@ -30,7 +30,7 @@ import (
 // version is injected at build time with -ldflags "-X main.version=...".
 var version = "dev"
 
-const usageText = `luffy - PirateBox in Go
+const usageText = `luffy - PirateBox-compatible file share and chat server
 
 Usage:
   luffy [global flags] <command>

@@ -63,7 +63,7 @@ func New(opts Options) *Server {
 		cfg := forum.Defaults(filepath.Join(opts.Cfg.ShareFolder, "forumspace"))
 		cfg.CGIURL = "/board/"
 		if opts.Cfg.Host != "" {
-			cfg.BoardDescription = "PirateBox Board. Put media reviews or questions here.<br>\n" +
+			cfg.BoardDescription = "Luffy Board. Put media reviews or questions here.<br>\n" +
 				`<A HREF="http://` + opts.Cfg.Host + `">Click here to go back to the main site</a> `
 		}
 		opts.Forum = forum.New(cfg)

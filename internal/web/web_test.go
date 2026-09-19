@@ -141,7 +141,7 @@ func TestContentServesEmbeddedAssetsWithoutFolder(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d", rec.Code)
 	}
-	if !strings.Contains(rec.Body.String(), "PirateBox") {
+	if !strings.Contains(rec.Body.String(), "Luffy") {
 		t.Errorf("embedded index missing: %s", rec.Body.String())
 	}
 	css := do(t, srv, http.MethodGet, "/content/css/page_style.css", nil, nil)

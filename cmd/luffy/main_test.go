@@ -223,8 +223,8 @@ func TestRunServeEndToEnd(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("content status = %d", rec.Code)
 	}
-	if !strings.Contains(rec.Body.String(), "PirateBox") {
-		t.Errorf("content body missing PirateBox: %s", rec.Body.String())
+	if !strings.Contains(rec.Body.String(), "Luffy") {
+		t.Errorf("content body missing Luffy: %s", rec.Body.String())
 	}
 	cancel()
 	select {
@@ -332,7 +332,7 @@ func TestRunServeBuildsForumFromConfig(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("board status = %d", rec.Code)
 	}
-	if !strings.Contains(rec.Body.String(), "PirateBox Board") {
+	if !strings.Contains(rec.Body.String(), "Luffy Board") {
 		t.Errorf("board page = %s", rec.Body.String())
 	}
 	cancel()

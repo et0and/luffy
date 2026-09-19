@@ -292,7 +292,7 @@ func TestNodeHostname(t *testing.T) {
 		t.Errorf("NodeHostname without suffix = %q", name)
 	}
 	cfg = FromValues(Values{"NODE_CONFIG_ACTIVE": "yes", "NODE_NAME": ""})
-	if name, _ := cfg.NodeHostname(); name != "piratebox.lan" {
+	if name, _ := cfg.NodeHostname(); name != "luffy.lan" {
 		t.Errorf("NodeHostname fallback = %q", name)
 	}
 	cfg = FromValues(Values{"NODE_CONFIG_ACTIVE": "no"})

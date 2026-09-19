@@ -12,8 +12,8 @@ func TestWWWContentContainsStartPage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("index.html: %v", err)
 	}
-	if !strings.Contains(string(index), "PirateBox") {
-		t.Error("index.html does not mention PirateBox")
+	if !strings.Contains(string(index), "Luffy") {
+		t.Error("index.html does not mention Luffy")
 	}
 }
 
@@ -25,7 +25,7 @@ func TestWWWContentIncludesAssets(t *testing.T) {
 		"js/scripts.js",
 		"js/jquery.min.js",
 		"js/l10n.js",
-		"img/piratebox-logo-small.png",
+		"img/logo-small.png",
 		"img/menu.png",
 		"favicon.ico",
 		"locales/locales.ini",

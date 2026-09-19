@@ -1,7 +1,7 @@
-// Package assets embeds the default PirateBox web content.
+// Package assets embeds the default web content.
 //
-// The content is a copy of piratebox/piratebox/www_content from the
-// original Python project. Luffy can write it to the USB stick on
+// The content comes from the original PirateBox project, with the brand
+// names replaced. Luffy can write it to the USB stick on
 // `luffy setup content`, so a router only needs the single binary.
 package assets
 

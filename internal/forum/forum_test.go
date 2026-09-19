@@ -315,7 +315,7 @@ func TestRenderIndexContainsThreads(t *testing.T) {
 	summaries, total, _ := store.ListThreads(0)
 	page := store.RenderIndex(summaries, total, 0)
 	for _, want := range []string{
-		"PirateBox Board", "Hello board", "Alice", "Start a new thread",
+		"Luffy Board", "Hello board", "Alice", "Start a new thread",
 		"/content/css/forest.css", "threads_table",
 	} {
 		if !strings.Contains(page, want) {
@@ -505,7 +505,7 @@ func TestProcessAuthorAndSubjectHelpers(t *testing.T) {
 func TestRenderStandaloneError(t *testing.T) {
 	store, _ := fixedStore(t)
 	page := store.RenderStandaloneError("boom")
-	if !strings.Contains(page, "boom") || !strings.Contains(page, "PirateBox Board") {
+	if !strings.Contains(page, "boom") || !strings.Contains(page, "Luffy Board") {
 		t.Errorf("standalone error page = %s", page)
 	}
 }
