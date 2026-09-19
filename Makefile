@@ -14,7 +14,7 @@ GO      ?= go
 LDFLAGS := -s -w -X main.version=$(VERSION)
 PKG     := ./cmd/luffy
 
-.PHONY: all build test vet fmt clean dist mips mipsle arm arm64 amd64
+.PHONY: all build test vet fmt clean dist mips mipsle arm arm64 amd64 upx
 
 all: build
 
@@ -40,6 +40,13 @@ amd64:
 
 ## Build every supported target.
 dist: mips mipsle arm arm64 amd64
+
+## Optional: compress the router binaries with UPX.
+## A TL-MR3020 has 4 MB of flash; UPX brings the MIPS build down to about
+## 2.5 MB. Install upx first (brew install upx / apt install upx-ucl).
+upx: mips mipsle
+	upx --best --lzma dist/$(BINARY)-linux-mips-softfloat
+	upx --best --lzma dist/$(BINARY)-linux-mipsle-softfloat
 
 test:
 	$(GO) test ./...

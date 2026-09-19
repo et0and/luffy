@@ -47,6 +47,16 @@ make mips
 The MIPS build is static, soft-float and stripped. It runs on OpenWrt
 `mips_24kc` systems without any runtime dependencies.
 
+The uncompressed MIPS binary is about 7.9 MB. A TL-MR3020 only has 4 MB of
+flash, so compress the router builds with UPX (verified at 1.9 MB):
+
+```sh
+make upx    # requires the upx tool
+```
+
+Alternatively install luffy on the USB stick that already holds the share
+folder, or build a custom image with more flash.
+
 ## Install on a router
 
 ```sh
