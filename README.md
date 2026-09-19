@@ -514,6 +514,31 @@ five architectures, compresses the MIPS builds with UPX, writes
 The `luffy-v` prefix keeps these tags separate from the historical
 PirateBox tags.
 
+## Credits
+
+Luffy is a rewrite of the PirateBox server, which was built by other people
+first. The configuration format, the chat protocol, the web interface and
+the data layouts all come from their work.
+
+* **David Darts** — the original PirateBox idea.
+* **Matthias Strubel** — the script collection this port follows, and the
+  author of most of the shell and Python that luffy replaces.
+* **PirateBox-Dev** — the project that maintained the scripts.
+* **David Brooks** — the interface design.
+
+Luffy also stands in for software that it does not contain:
+
+* **Droopy** by Stéphane Pelletier — the file upload interface.
+* **forest.py** by Nelis Franken — the flat-file forum whose format luffy
+  reads and writes.
+* **Kareha** by Wakaba — the imageboard, which is not ported.
+
+Thank you to the contributors listed in the original project's `AUTHORS`
+file, whose work shaped the behaviour luffy reproduces.
+
+The original project lives at
+<https://github.com/PirateBox-Dev/PirateBoxScripts_Webserver>.
+
 ## Licence
 
 GPLv3, inherited from the original PirateBox scripts. See `LICENSE`.
