@@ -99,6 +99,9 @@ func (m *Manager) Start(ctx context.Context) error {
 	if err := m.startRadvd(ctx); err != nil {
 		m.Logger.Warn("radvd failed", "error", err)
 	}
+	if err := m.startIRC(ctx); err != nil {
+		m.Logger.Warn("IRC server failed", "error", err)
+	}
 	if err := m.prepareShoutbox(); err != nil {
 		m.Logger.Warn("shoutbox preparation failed", "error", err)
 	}
